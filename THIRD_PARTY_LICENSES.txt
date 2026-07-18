@@ -1,0 +1,30 @@
+================================================================================
+dosbox-mcp THIRD-PARTY LICENSES
+================================================================================
+
+Runtime dependencies, installed from PyPI:
+
+  httpx          HTTP client for Python
+                 Copyright (c) Tom Christie
+                 License: BSD-3-Clause
+                 Homepage: https://github.com/encode/httpx
+
+  mcp            Model Context Protocol SDK
+                 Copyright (c) Anthropic, PBC.
+                 License: MIT
+                 Homepage: https://modelcontextprotocol.io
+
+  platformdirs   Platform-specific user directories
+                 Copyright (c) 2010-202x The platformdirs developers
+                 License: MIT
+                 Homepage: https://github.com/tox-dev/platformdirs
+
+  tomlkit        Style-preserving TOML library
+                 Copyright (c) Sebastien Eustace
+                 License: MIT
+                 Homepage: https://github.com/python-poetry/tomlkit
+
+All licenses are compatible with GPL-2.0-or-later.
+
+END OF THIRD-PARTY LICENSES
+================================================================================
