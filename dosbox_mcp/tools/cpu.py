@@ -5,6 +5,22 @@
 import json
 
 
+def register_state(server, client, add_tool, feature=None):
+    add_tool(
+        name="cpu_read_registers",
+        description=(
+            "Read all CPU registers: general (eax..ebp), segment "
+            "(cs,ds,es,ss,fs,gs), eip, and flags. Use this to get the "
+            "live cs:eip for a paused program, e.g. to anchor a "
+            "debug_map_set_base call against a Ghidra static address."
+        ),
+        read_only=True,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _cpu_state(client),
+        feature=feature,
+    )
+
+
 def register(server, client, add_tool, feature=None):
     add_tool(
         name="cpu_write_register",
@@ -37,4 +53,10 @@ def _cpu_write(client, args):
     import mcp.types as types
     body = {"register": args["register"], "value": args["value"]}
     result = client.put("/api/v1/cpu/register", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _cpu_state(client):
+    import mcp.types as types
+    result = client.get("/api/v1/cpu/state")
     return [types.TextContent(type="text", text=json.dumps(result))]

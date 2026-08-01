@@ -120,7 +120,7 @@ verify the advertised contract against it.
 | memory | `memory/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/search` | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
-| cpu | `cpu/register` PUT | register writes (feature: cpu_control) |
+| cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
 | io | `io/port` GET/PUT | port I/O (feature: port_io) |
 | script | `script/load`, `script/start`, `script/status`, `script/stop` | sandboxed Lua; `script/load` takes the raw source as a text/plain body |
 | media | `drive/swap`, mount routes | disk image swapping; mount policy applies underneath |
@@ -210,6 +210,10 @@ changed and the version it produces.
   negotiation rules, transport and token requirements, hello route,
   feature flags, and the 1.0 route groups as shipped by
   dosbox-automation 0.84.
+- **1.0.1 (draft)** - clarification, no behavior change: documents
+  `cpu/state` GET (feature: cpu_registers) in the cpu route group. This
+  route shipped alongside `cpu/register` PUT in 0.84 but was missing
+  from the 1.0 route table.
 - **1.1.0 (draft)** - fills in the `debugger` feature flag: adds the
   `debug/status`, `debug/pause`, `debug/continue`, `debug/step`, and
   `debug/breakpoints` routes (execute/interrupt/memory breakpoints).

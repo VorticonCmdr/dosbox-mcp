@@ -2,6 +2,8 @@
 # License: GPL-2.0-or-later. Contact: dosbox-mcp@trinity2k.net
 #
 
+import json
+
 from dosbox_mcp.connection import Connection
 from dosbox_mcp.config import Config
 from dosbox_mcp.server import build_server
@@ -41,7 +43,12 @@ def test_all_tools_registered_regardless_of_features():
     assert "port_read" in names
     assert "port_write" in names
     assert "cpu_write_register" in names
-    for t in ("debug_status", "debug_pause", "debug_continue", "debug_step"):
+    assert "cpu_read_registers" in names
+    for t in ("debug_status", "debug_pause", "debug_continue", "debug_step",
+              "debug_breakpoint_add", "debug_breakpoint_list", "debug_breakpoint_delete"):
+        assert t in names
+    for t in ("debug_map_set_base", "debug_map_to_live", "debug_map_to_ghidra",
+              "debug_map_status"):
         assert t in names
 
 
@@ -54,11 +61,14 @@ class TestCapabilityModes:
         assert "screen_text" in names
         assert "mem_read" in names
         assert "dosbox_status" in names
+        assert "cpu_read_registers" in names
+        assert "debug_map_to_live" in names
         assert "mem_write" not in names
         assert "input_key" not in names
         assert "script_run" not in names
         assert "drive_swap" not in names
         assert "port_write" not in names
+        assert "debug_map_set_base" not in names
 
     def test_interact_adds_input_media_script_but_not_surgery(self):
         names = _build(mode="interact").registered_tool_names()
@@ -165,6 +175,69 @@ def test_session_info_without_token(monkeypatch, tmp_path):
     info = _json.loads(result[0].text)
     assert info["token"] == "absent"
     assert "note" in info
+
+
+def test_cpu_read_registers_hits_state_route():
+    from dosbox_mcp.tools.cpu import _cpu_state
+
+    class _FakeClient:
+        def get(self, path, params=None, headers=None):
+            return {"registers": {"cs": 0x2000, "eip": 0x100}}
+
+    result = _cpu_state(_FakeClient())
+    body = json.loads(result[0].text)
+    assert body["registers"]["cs"] == 0x2000
+
+
+class TestGhidraAddressMap:
+    """Bridge-side arithmetic, no engine call involved."""
+
+    def _fresh_state(self):
+        from dosbox_mcp.tools import ghidra
+        state = {"base_segment": None, "delta": None, "ghidra_anchor": None}
+        return ghidra, state
+
+    def test_translations_fail_before_a_base_is_set(self):
+        ghidra, state = self._fresh_state()
+        result = ghidra._to_live(state, {"ghidra_address": 0x150})
+        assert "No mapping set" in result[0].text
+
+    def test_set_base_then_roundtrip(self):
+        ghidra, state = self._fresh_state()
+        # .COM-style anchor: entry point 0x100 in both spaces, live CS 0x2000
+        ghidra._set_base(state, {
+            "ghidra_address": 0x100, "live_segment": 0x2000, "live_offset": 0x100,
+        })
+
+        live = json.loads(ghidra._to_live(state, {"ghidra_address": 0x150})[0].text)
+        assert live == {"segment": 0x2000, "offset": 0x150, "linear": 0x2000 * 16 + 0x150}
+
+        back = json.loads(ghidra._to_ghidra(state, {
+            "live_segment": 0x2000, "live_offset": 0x150,
+        })[0].text)
+        assert back == {"ghidra_address": 0x150}
+
+    def test_to_ghidra_refuses_a_different_segment(self):
+        ghidra, state = self._fresh_state()
+        ghidra._set_base(state, {
+            "ghidra_address": 0x100, "live_segment": 0x2000, "live_offset": 0x100,
+        })
+        result = json.loads(ghidra._to_ghidra(state, {
+            "live_segment": 0x3000, "live_offset": 0x150,
+        })[0].text)
+        assert "error" in result
+        assert "0x3000" in result["error"]
+
+    def test_status_reports_unset_and_set(self):
+        ghidra, state = self._fresh_state()
+        assert json.loads(ghidra._status(state)[0].text) == {"set": False}
+        ghidra._set_base(state, {
+            "ghidra_address": 0x100, "live_segment": 0x2000, "live_offset": 0x100,
+        })
+        status = json.loads(ghidra._status(state)[0].text)
+        assert status == {
+            "set": True, "base_segment": 0x2000, "ghidra_anchor": 0x100, "delta": 0,
+        }
 
 
 def test_script_run_sends_lua_as_text_not_json():

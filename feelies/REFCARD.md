@@ -74,12 +74,49 @@ These work whether or not an engine is connected.
 
 ## CPU and ports
 
+- **cpu_read_registers** (read-only) - read all CPU registers: general,
+  segment, eip, flags (feature: cpu_registers). `{}`
 - **cpu_write_register** - write a CPU register (feature: cpu_control).
   `{"register": "eax", "value": 0}`
 - **port_read** (read-only) - read an x86 I/O port (feature: port_io).
   `{"port": 968, "width": 1}`
 - **port_write** - write an x86 I/O port (feature: port_io).
   `{"port": 968, "value": 1, "width": 1}`
+
+## Debugger (feature: debugger)
+
+Execution control. Breakpoints only fire with an interpreted CPU core
+(`core = normal` or `full`); see PROTOCOL.md.
+
+- **debug_status** (read-only) - whether execution is paused. `{}`
+- **debug_pause** - pause at the current instruction. `{}`
+- **debug_continue** - resume; arms any breakpoints added while paused.
+  Returns immediately, does not wait for a breakpoint. `{}`
+- **debug_step** - execute one instruction, pause again. `{}`
+- **debug_breakpoint_add** - add an execute/interrupt/memory breakpoint.
+  `{"type": "interrupt", "int": 33, "ah": 61}`
+- **debug_breakpoint_list** (read-only) - list breakpoints; `index` is
+  positional, not stable. `{}`
+- **debug_breakpoint_delete** - remove one by index, or all if omitted.
+  `{"index": 0}`
+
+## Ghidra address mapping (feature: debugger)
+
+Bridge-side arithmetic only - no engine call, no dependency on Ghidra
+itself. Anchors a Ghidra static address against a live segment:offset
+(get the latter from `cpu_read_registers`) so the two tools' addresses
+translate directly. Exact for .COM programs and single-segment .EXE
+programs.
+
+- **debug_map_set_base** - anchor the mapping at one known
+  correspondence point, e.g. the entry point.
+  `{"ghidra_address": 256, "live_segment": 4660, "live_offset": 256}`
+- **debug_map_to_live** (read-only) - Ghidra address -> segment:offset.
+  `{"ghidra_address": 336}`
+- **debug_map_to_ghidra** (read-only) - segment:offset -> Ghidra
+  address; refuses rather than guessing if the segment doesn't match
+  the anchor. `{"live_segment": 4660, "live_offset": 336}`
+- **debug_map_status** (read-only) - the current mapping, if any. `{}`
 
 ## Scripts (the escape hatch)
 

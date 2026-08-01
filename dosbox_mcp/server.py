@@ -11,7 +11,7 @@ import mcp.types as types
 from .config import MODES, Config
 from .connection import Connection, guard
 from .lifecycle import InstanceManager
-from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, media, script
+from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, ghidra, media, script
 
 # Groups whose non-read-only tools register under "interact" mode.
 # Everything else non-read-only (memory surgery, port IO, cpu control,
@@ -94,7 +94,9 @@ def build_server(conn, mode: str = "full", manager=None):
     freeze.register(server, conn, add_tool_for("freeze"), feature="freeze")
     io.register(server, conn, add_tool_for("port_io"), feature="port_io")
     cpu.register(server, conn, add_tool_for("cpu"), feature="cpu_control")
+    cpu.register_state(server, conn, add_tool_for("cpu"), feature="cpu_registers")
     debug.register(server, conn, add_tool_for("debug"), feature="debugger")
+    ghidra.register(server, conn, add_tool_for("debug"), feature="debugger")
     bridge.register(server, conn, add_tool_for("bridge"),
                     manager=manager, mode=mode, get_tools=get_tools)
 

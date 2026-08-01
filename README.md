@@ -59,6 +59,19 @@ Lua scripting, keyboard and mouse input, and memory access. You choose
 how much reach an agent has, from read-only observation to full
 control.
 
+## Pairs with Ghidra for reverse engineering
+
+The `debugger` feature (execution control: pause/step/continue and
+breakpoints) plus a handful of address-mapping tools let an agent
+combine this bridge with a separate Ghidra MCP server: analyze a
+program statically in Ghidra, then set breakpoints and interpret a
+paused CPU state against the exact same addresses live in DOSBox. The
+mapping tools (`debug_map_set_base` and friends) are pure client-side
+arithmetic - they don't talk to Ghidra or the engine, just translate
+addresses once anchored at one known correspondence point (usually the
+entry point). See the "Debugger" and "Ghidra address mapping" sections
+of `feelies/REFCARD.md` for the full tool list.
+
 ## An open protocol
 
 The contract between this bridge and the emulator is written down in
