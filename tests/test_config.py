@@ -2,11 +2,16 @@
 # License: GPL-2.0-or-later. Contact: dosbox-mcp@trinity2k.net
 #
 
+import os
+import sys
+from pathlib import Path
+
 import pytest
 
 from dosbox_mcp.config import (
     Config,
     ToolProtectedKey,
+    default_token_path,
     update_config_file,
     validate_base_url,
     write_config_template,
@@ -31,6 +36,62 @@ def test_loopback_urls_accepted(url):
 def test_non_loopback_or_bad_scheme_rejected(url):
     with pytest.raises(ValueError):
         validate_base_url(url)
+
+
+class TestDefaultTokenPath:
+    """The token path must match dosbox-automation's own per-OS config
+    directory (src/misc/cross.cpp get_or_create_config_dir()), which is
+    not what platformdirs would pick - notably macOS uses
+    ~/Library/Preferences, not ~/Library/Application Support."""
+
+    def test_macos_uses_preferences_not_application_support(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        path = default_token_path()
+        assert path == (
+            Path.home() / "Library" / "Preferences" / "dosbox-automation" /
+            "webserver" / "api_token"
+        )
+
+    # Python 3.14 refuses to instantiate a WindowsPath (drive letter,
+    # backslashes) on a non-Windows interpreter, so these two can only
+    # run for real on Windows - default_token_path() uses the ambient
+    # Path class, which is only WindowsPath there. Not simulatable
+    # cross-platform without changing what production code returns.
+    @pytest.mark.skipif(sys.platform != "win32", reason="needs a real WindowsPath")
+    def test_windows_uses_localappdata(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\test\AppData\Local")
+        path = default_token_path()
+        assert path == (
+            Path(r"C:\Users\test\AppData\Local") / "dosbox-automation" /
+            "webserver" / "api_token"
+        )
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="needs a real WindowsPath")
+    def test_windows_xdg_override_wins(self, monkeypatch):
+        monkeypatch.setattr(os, "name", "nt")
+        monkeypatch.setenv("XDG_CONFIG_HOME", r"C:\custom")
+        path = default_token_path()
+        assert path == (
+            Path(r"C:\custom") / "dosbox-automation" / "webserver" / "api_token"
+        )
+
+    def test_linux_uses_dot_config(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        path = default_token_path()
+        assert path == (
+            Path.home() / ".config" / "dosbox-automation" / "webserver" / "api_token"
+        )
+
+    def test_linux_xdg_config_home_override(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(os, "name", "posix")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        path = default_token_path()
+        assert path == tmp_path / "dosbox-automation" / "webserver" / "api_token"
 
 
 class TestConfigLoad:

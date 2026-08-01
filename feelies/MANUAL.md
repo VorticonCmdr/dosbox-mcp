@@ -202,6 +202,8 @@ untrusted for exactly this reason.
 - config: `~/.config/dosbox-mcp/config.toml` (write it with
   `dosbox-mcp setup --init`).
 - the token the bridge reads: wherever the engine writes it, by default
-  `~/.config/dosbox-automation/webserver/api_token`.
+  `webserver/api_token` under the engine's own per-OS config directory
+  (`~/Library/Preferences/dosbox-automation` on macOS, `~/.config/dosbox-automation`
+  on Linux, `%LOCALAPPDATA%\dosbox-automation` on Windows).
 - the reference card for every tool: REFCARD.md, next to this file.
 - troubleshooting: TECH-SUPPORT.md, next to this file.

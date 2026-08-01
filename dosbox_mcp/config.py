@@ -5,6 +5,7 @@
 import ipaddress
 import os
 import re
+import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -53,8 +54,27 @@ def default_config_path() -> Path:
 
 
 def default_token_path() -> Path:
-    """Where the engine's launcher writes the API token by default."""
-    return Path.home() / ".config" / "dosbox-automation" / "webserver" / "api_token"
+    """Where the engine's launcher writes the API token by default.
+
+    Mirrors dosbox-automation's own per-OS config directory choice
+    (get_or_create_config_dir() in src/misc/cross.cpp), which is not
+    the same directory platformdirs would pick: on macOS the engine
+    uses ~/Library/Preferences, not ~/Library/Application Support.
+    """
+    name = "dosbox-automation"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Preferences" / name
+    elif os.name == "nt":
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        if xdg:
+            base = Path(xdg) / name
+        else:
+            appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+            base = Path(appdata or Path.home()) / name
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        base = Path(xdg) / name if xdg else Path.home() / ".config" / name
+    return base / "webserver" / "api_token"
 
 
 def read_token(token_file: Path | None = None) -> str | None:
