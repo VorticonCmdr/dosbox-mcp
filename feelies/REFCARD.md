@@ -106,7 +106,11 @@ Bridge-side arithmetic only - no engine call, no dependency on Ghidra
 itself. Anchors a Ghidra static address against a live segment:offset
 (get the latter from `cpu_read_registers`) so the two tools' addresses
 translate directly. Exact for .COM programs and single-segment .EXE
-programs.
+programs. Don't expect the raw numbers to already match before
+anchoring: Ghidra's real-mode loader can't rebase a .COM import to a
+segment:0x0100 layout (it requires a zero segment offset), so it
+typically lands at 0000:0000, a constant 0x100 below every live
+address - anchoring absorbs that automatically.
 
 - **debug_map_set_base** - anchor the mapping at one known
   correspondence point, e.g. the entry point.

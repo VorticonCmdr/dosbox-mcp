@@ -16,6 +16,14 @@
 # down across multiple code segments or unresolved relocations -
 # debug_map_to_ghidra refuses to guess when asked about a different live
 # segment than the one the mapping was anchored to.
+#
+# Don't expect the raw numbers to already match before anchoring: a
+# Ghidra real-mode (x86:LE:16:Real Mode) import of a .COM file can't be
+# rebased to the conventional segment:0x0100 layout - Ghidra requires a
+# segmented image base to have a zero segment offset, so it typically
+# lands at 0000:0000 instead, 0x100 below every live address. That
+# constant offset is exactly what the anchor step absorbs; the two
+# address spaces are not expected to agree on numbering on their own.
 
 import json
 
