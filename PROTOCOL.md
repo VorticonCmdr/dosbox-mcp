@@ -96,7 +96,7 @@ supports. Version 1.0 defines these flags, all boolean:
 | cpu_control | CPU register writes |
 | port_io | x86 I/O port read/write |
 | freeze | per-frame value locks |
-| debugger | execution control (reserved; no 1.0 engine ships it) |
+| debugger | execution control: pause/continue/step and breakpoints (1.1) |
 
 A flag that is absent counts as false. Flags gate at call time: a
 client may know a route exists in the contract while the running build
@@ -138,6 +138,52 @@ Semantics that are part of the contract, not just the schemas:
   limits as one going through a bridge.
 
 
+## The 1.1 additions
+
+Additive to 1.0 under the existing `debugger` feature flag (see above).
+An engine that does not have the debugger built in still serves these
+routes, so a client can distinguish "route exists but this build lacks
+the capability" from "route doesn't exist at all": every debug route
+returns HTTP 501 with `{"error": "<name>: debugger capability not
+built in this binary"}` when the flag is false.
+
+| Group | Routes | Notes |
+|---|---|---|
+| debugger | `debug/status` GET, `debug/pause` POST, `debug/continue` POST, `debug/step` POST | pause/resume/single-step (feature: debugger) |
+| debugger | `debug/breakpoints` GET/POST/DELETE | execute, interrupt, and memory breakpoints (feature: debugger) |
+
+Semantics specific to this group:
+
+- `debug/pause` and `debug/continue` return immediately; they never
+  block on the emulator reaching a particular state. A client polls
+  `debug/status` to observe whether execution is paused. This is a
+  hard requirement, not a style preference: an engine that blocks
+  `debug/continue` until the next breakpoint hits (which may be never)
+  makes the whole automation API unusable for the duration.
+- A breakpoint added via `debug/breakpoints` POST does not take effect
+  until the next `debug/continue`; adding one does not retroactively
+  arm it while already running.
+- Breakpoint `index` (returned by GET and by a successful POST) is the
+  breakpoint's position in the engine's list, not a stable identifier.
+  It shifts whenever any breakpoint is added or removed. Clients must
+  re-list before deleting by index if other mutations may have
+  happened in between.
+- POST body shape for `debug/breakpoints`: `{"type": "execute" |
+  "interrupt" | "memory", ...}`. `execute` and `memory` take `segment`
+  and `offset`; `interrupt` takes `int` and optionally `ah`/`al` (omit
+  either to match any value at that position -- e.g. `{"type":
+  "interrupt", "int": 33, "ah": 61}` breaks on every DOS AH=0x3D file
+  open, regardless of AL).
+- Breakpoints of any kind require the engine to be running an
+  interpreted CPU core (`core = normal` or `core = full`). Under the
+  default `core = auto`, real-mode programs typically run on the
+  dynamic recompiler, which has no breakpoint hooks: adding a
+  breakpoint and continuing both report success, but it silently never
+  fires. This is an engine-side limitation, not a protocol one, but
+  clients should surface it -- e.g. warn when `debug/breakpoints` is
+  used while the engine's configured core is not `normal`/`full`.
+
+
 ## Conformance
 
 An engine conforms to protocol 1.0 when it:
@@ -164,3 +210,9 @@ changed and the version it produces.
   negotiation rules, transport and token requirements, hello route,
   feature flags, and the 1.0 route groups as shipped by
   dosbox-automation 0.84.
+- **1.1.0 (draft)** - fills in the `debugger` feature flag: adds the
+  `debug/status`, `debug/pause`, `debug/continue`, `debug/step`, and
+  `debug/breakpoints` routes (execute/interrupt/memory breakpoints).
+  Non-blocking pause/continue/step and the engine-side `core =
+  normal`/`full` requirement for breakpoints to fire are part of the
+  contract, not just implementation notes.
