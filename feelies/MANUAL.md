@@ -87,7 +87,8 @@ There is no setup wizard. The commented file is the wizard.
 
 Environment variables, mostly for unusual setups: `DOSBOX_API_URL`
 (target URL, loopback only), `DOSBOX_API_TOKEN` (token by value,
-prefer the file), `DOSBO
+prefer the file), `DOSBOX_TOKEN_FILE` (override where the bridge reads
+the token from), `DOSBOX_MCP_CONFIG` (override the config file path).
 
 ## Getting connected
 
@@ -124,6 +125,68 @@ A typical session, in the agent's words:
 
 Reading and typing in a loop is most of it. Watch the screen, decide,
 press a key, watch again.
+
+## Reverse engineering with Ghidra (feature: debugger)
+
+Static analysis in Ghidra and live control through this bridge cover
+each other's blind spots: Ghidra shows you the code without running
+it, the debugger tools let you run it and stop exactly where Ghidra
+told you to look. Wiring the two together needs a separate Ghidra MCP
+server connected in the same agent session (this bridge has no Ghidra
+dependency itself) plus the engine running an interpreted CPU core -
+`core = normal` or `core = full`. Under the default `core = auto`,
+real-mode programs typically land on the dynamic recompiler, which has
+no breakpoint hooks: adding a breakpoint and continuing both report
+success, and it silently never fires. Set the core before anything
+else in this workflow.
+
+**The address-space gap.** Ghidra's addresses and DOSBox's live
+`segment:offset` addresses are two different numbering systems that
+happen to describe the same bytes. They are not expected to agree
+numerically, even for the simple case: Ghidra's real-mode language
+(`x86:LE:16:Real Mode`) requires a segmented image base to have a zero
+segment offset, so importing a raw `.COM` file - which DOS always loads
+with code starting at offset `0x100` in its segment, after the PSP -
+typically lands Ghidra's addresses at `0000:0000` instead, a constant
+`0x100` below every live address for that program. Bigger `.EXE`
+programs add relocations and multiple segments on top. Don't try to
+predict the offset; anchor it instead.
+
+**Anchoring.** Pick one instruction whose address you know in both
+worlds and tell the bridge the correspondence:
+
+1. Get the engine paused at a known instruction. The easiest anchor is
+   usually not the very first byte (timing makes that fiddly to catch)
+   but the first interrupt call the program makes: add an interrupt
+   breakpoint with `debug_breakpoint_add`
+   (`{"type": "interrupt", "int": 33}` catches any INT 21h, the
+   universal DOS API call), `debug_continue`, poll `debug_status` until
+   `debugging: true`.
+2. `cpu_read_registers` for the live `cs` and `eip` at that exact
+   instruction.
+3. Find the same instruction's address in Ghidra (decompile or
+   disassemble around the entry point; an INT 21h shows up plainly).
+4. `debug_map_set_base` with that Ghidra address and the live
+   `cs`/`eip` from steps 1-2. From here on the two address spaces
+   translate.
+
+**Using the mapping.** With a base set:
+
+- Found something interesting in Ghidra (a function, a suspicious call
+  site)? `debug_map_to_live` its address, `debug_breakpoint_add` an
+  execute breakpoint at the returned `segment`/`offset`,
+  `debug_continue`, poll `debug_status`.
+- Breakpoint hit and you want to know where you are? `cpu_read_registers`
+  for the live `cs`/`eip`, `debug_map_to_ghidra` to get back the static
+  address, then look that up in Ghidra's decompilation.
+- `debug_map_status` shows the current anchor; `debug_map_to_ghidra`
+  refuses (rather than guessing) if you pass a live segment other than
+  the one you anchored against - a sign you've stepped into a segment
+  the mapping doesn't cover and need a fresh anchor there.
+
+Breakpoint `index` values (`debug_breakpoint_list`) are positions, not
+stable IDs - re-list before deleting by index if you've added or
+removed others in between.
 
 ## A note the agent should take to heart
 
