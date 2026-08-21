@@ -34,6 +34,7 @@ class Connection:
         self._transport = transport
         self._client: DosboxClient | None = None
         self._features: dict = {}
+        self._capabilities: dict = {}
         self._engine_info: dict = {}
         self._effective: tuple[int, int] | None = None
 
@@ -52,6 +53,13 @@ class Connection:
     @property
     def features(self) -> dict:
         return self._features
+
+    @property
+    def capabilities(self) -> dict:
+        """{group: {state, reason, limits}} from an engine new enough to
+        send it (1.2+); {} against an older engine, in which case guard()
+        falls back to the plain features boolean."""
+        return self._capabilities
 
     @property
     def engine_info(self) -> dict:
@@ -75,6 +83,7 @@ class Connection:
             "engine_version": self._engine_info.get("version"),
             "protocol": self.effective_protocol,
             "features": dict(self._features),
+            "capabilities": dict(self._capabilities),
             "token": "present" if token else "absent",
         }
 
@@ -145,6 +154,7 @@ class Connection:
         self._client = client
         self._engine_info = info
         self._features = info.get("features", {})
+        self._capabilities = info.get("capabilities", {})
         self._effective = effective
         log.info("attached to %s (%s, protocol %s)", self._config.base_url,
                  info.get("version", "?"), self.effective_protocol)
@@ -156,6 +166,7 @@ class Connection:
     def detach(self):
         self._client = None
         self._features = {}
+        self._capabilities = {}
         self._engine_info = {}
         self._effective = None
         log.info("detached from dosbox")
@@ -239,11 +250,25 @@ def guard(connection: Connection, handler, feature=None, tool_name=None):
     def guarded(args):
         try:
             connection.ensure_connected()
-            if feature and not connection.features.get(feature):
-                return to_error_result(
-                    f"Feature '{feature}' is not enabled in the running instance.",
-                    tool=tool_name, code="feature_disabled",
-                )
+            if feature:
+                cap = connection.capabilities.get(feature)
+                if cap is not None:
+                    # 1.2+ engine: the capability's own state is
+                    # authoritative. 'degraded' still allows the call
+                    # through (the group is at least partially usable,
+                    # matching what features[feature] would already say);
+                    # only 'off' refuses.
+                    if cap.get("state") == "off":
+                        reason = cap.get("reason") or "not enabled in the running instance"
+                        return to_error_result(
+                            f"Feature '{feature}' is off: {reason}",
+                            tool=tool_name, code="feature_disabled",
+                        )
+                elif not connection.features.get(feature):
+                    return to_error_result(
+                        f"Feature '{feature}' is not enabled in the running instance.",
+                        tool=tool_name, code="feature_disabled",
+                    )
             return handler(args)
         except NotConnected as e:
             return to_error_result(str(e), tool=tool_name, code="not_connected")

@@ -18,7 +18,7 @@ def _refused(request):
     raise httpx.ConnectError("connection refused")
 
 
-def _make_conn(token=None, features=None):
+def _make_conn(token=None, features=None, capabilities=None):
     config = Config(base_url="http://127.0.0.1:8386", token=token)
     # Unit tests never touch the network: even the hello probe runs
     # against a transport that simulates "nothing is listening".
@@ -31,6 +31,8 @@ def _make_conn(token=None, features=None):
             config.base_url, token or TOKEN, transport=transport
         )
         conn._features = features
+        if capabilities is not None:
+            conn._capabilities = capabilities
     return conn
 
 
@@ -76,11 +78,13 @@ def test_connected_with_features():
 
 
 def test_detach_clears_state():
-    conn = _make_conn(token="0" * 64, features={"memory": True})
+    conn = _make_conn(token="0" * 64, features={"memory": True},
+                      capabilities={"memory": {"state": "on"}})
     assert conn.connected
     conn.detach()
     assert not conn.connected
     assert conn.features == {}
+    assert conn.capabilities == {}
 
 
 def test_guard_returns_error_when_not_connected():
@@ -131,6 +135,55 @@ def test_guard_passes_through_when_no_feature_gate():
     guarded = guard(conn, handler, feature=None)
     result = guarded({})
     assert result[0].text == "ok"
+
+
+def test_guard_off_capability_refuses_with_the_engines_reason():
+    conn = _make_conn(
+        token="0" * 64,
+        features={"debugger": False},
+        capabilities={"debugger": {"state": "off",
+                                   "reason": "debugger not built into this binary"}},
+    )
+
+    def handler(args):
+        return [types.TextContent(type="text", text="ok")]
+
+    guarded = guard(conn, handler, feature="debugger")
+    result = guarded({})
+    assert isinstance(result, types.CallToolResult)
+    assert result.isError
+    assert "debugger not built into this binary" in result.content[0].text
+
+
+def test_guard_degraded_capability_still_passes_through():
+    conn = _make_conn(
+        token="0" * 64,
+        features={"debugger": True},
+        capabilities={"debugger": {"state": "degraded",
+                                   "reason": "memory breakpoints unavailable"}},
+    )
+
+    def handler(args):
+        return [types.TextContent(type="text", text="ok")]
+
+    guarded = guard(conn, handler, feature="debugger")
+    result = guarded({})
+    assert result[0].text == "ok"
+
+
+def test_guard_falls_back_to_features_boolean_without_a_capabilities_block():
+    # An engine older than 1.2 sends 'features' but no 'capabilities' at
+    # all - guard() must behave exactly as it did before this existed.
+    conn = _make_conn(token="0" * 64, features={"freeze": False})
+
+    def handler(args):
+        return [types.TextContent(type="text", text="ok")]
+
+    guarded = guard(conn, handler, feature="freeze")
+    result = guarded({})
+    assert isinstance(result, types.CallToolResult)
+    assert result.isError
+    assert "not enabled" in result.content[0].text
 
 
 class TestVersionNegotiation:
@@ -197,6 +250,22 @@ class TestStatus:
         assert status["protocol"] == "1.0"
         assert status["features"] == {"memory": True}
         assert status["token"] == "present"
+
+    def test_status_passes_through_the_capabilities_block(self):
+        conn = _connectable({
+            "version": "0.84-da3", "mcp_protocol": "1.0",
+            "features": {"debugger": True},
+            "capabilities": {"debugger": {"state": "degraded",
+                                          "reason": "memory breakpoints unavailable"}},
+        })
+        conn.ensure_connected()
+        status = conn.status()
+        assert status["capabilities"]["debugger"]["state"] == "degraded"
+
+    def test_status_capabilities_is_empty_dict_against_an_older_engine(self):
+        conn = _connectable({"version": "0.84-da2", "features": {"memory": True}})
+        conn.ensure_connected()
+        assert conn.status()["capabilities"] == {}
 
     def test_status_when_disconnected(self):
         conn = _make_conn()
