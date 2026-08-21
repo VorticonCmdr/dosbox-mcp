@@ -4,8 +4,10 @@
 
 import json
 
-from dosbox_mcp.connection import Connection
+import httpx
+
 from dosbox_mcp.config import Config
+from dosbox_mcp.connection import Connection
 from dosbox_mcp.server import build_server
 from dosbox_mcp.tools.memory import _mem_read, _mem_write
 
@@ -269,3 +271,36 @@ def test_script_run_sends_lua_as_text_not_json():
     assert ctype == "text/plain"
     # start is a plain POST with no body
     assert client.json_calls == [("/api/v1/script/start", None)]
+
+
+def test_script_run_works_through_a_real_connection():
+    # In production, script.register passes `conn` (a Connection) as
+    # `client`, not a DosboxClient or the fake above. Connection had no
+    # post_text, so every real script_run call raised AttributeError; the
+    # fake in the previous test has its own post_text and never caught it.
+    from dosbox_mcp.tools.script import _script_run
+
+    calls = []
+
+    def handler(request):
+        if request.url.path == "/api/v1/dosbox/info":
+            return httpx.Response(
+                200, json={"version": "0.84-da3", "features": {},
+                          "mcp_protocol": "1.0"})
+        if request.url.path == "/api/v1/script/load":
+            calls.append(("load", request.content,
+                          request.headers.get("content-type")))
+            return httpx.Response(200, json={"status": "loaded"})
+        if request.url.path == "/api/v1/script/start":
+            calls.append(("start", request.content))
+            return httpx.Response(200, json={"status": "running"})
+        return httpx.Response(404, json={"error": "not found"})
+
+    config = Config(base_url="http://127.0.0.1:8386", token="0" * 64)
+    conn = Connection(config, transport=httpx.MockTransport(handler))
+
+    result = _script_run(conn, {"script": "dosbox.log('hi')"})
+
+    assert calls[0] == ("load", b"dosbox.log('hi')", "text/plain")
+    assert calls[1][0] == "start"
+    assert json.loads(result[0].text) == {"status": "running"}
