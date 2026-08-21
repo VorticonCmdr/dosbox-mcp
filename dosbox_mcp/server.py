@@ -59,7 +59,7 @@ def build_server(conn, mode: str = "full", manager=None):
             return
         # Bridge-internal tools skip the connection guard: most of them
         # must work while disconnected - that is their point.
-        wrapped = (guard(conn, handler, feature=feature)
+        wrapped = (guard(conn, handler, feature=feature, tool_name=name)
                    if needs_connection else handler)
         annotations = types.ToolAnnotations(readOnlyHint=read_only)
         registry[name] = (

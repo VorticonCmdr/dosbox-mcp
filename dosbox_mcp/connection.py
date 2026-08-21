@@ -7,7 +7,7 @@ import logging
 import httpx
 import mcp.types as types
 
-from .client import DosboxClient
+from .client import DosboxClient, DosboxError
 from .config import Config, default_token_path, read_token
 from .protocol import IncompatiblePeer, effective_version
 
@@ -122,18 +122,20 @@ class Connection:
                               transport=self._transport)
         try:
             info = client.get(INFO_PATH)
-        except httpx.ConnectError:
+        except httpx.TransportError as e:
             raise NotConnected(
-                f"Cannot reach dosbox at {self._config.base_url}"
+                f"Cannot reach dosbox at {self._config.base_url}: {e}"
             ) from None
-        except RuntimeError as e:
-            if "401" in str(e) and self._config.token:
+        except DosboxError as e:
+            if e.status == 401 and self._config.token:
                 # A remembered token (e.g. from a stopped spawned
                 # instance) went stale: drop it and retry once via the
                 # normal token lookup.
                 self._config.token = None
                 return self._try_connect()
-            raise NotConnected(f"attach to {self._config.base_url} failed: {e}") from e
+            raise NotConnected(
+                f"attach to {self._config.base_url} failed: {e.message}"
+            ) from e
 
         try:
             effective = effective_version(info, pin=self._config.protocol)
@@ -164,11 +166,13 @@ class Connection:
         fn = getattr(self._client, method)
         try:
             return fn(path, **kwargs)
-        except (httpx.ConnectError, httpx.RemoteProtocolError):
+        except httpx.TransportError as e:
             self.detach()
-            raise NotConnected("dosbox went away during the call")
-        except RuntimeError as e:
-            if "401" in str(e):
+            raise NotConnected(
+                f"dosbox went away or stopped responding during the call: {e}"
+            ) from e
+        except DosboxError as e:
+            if e.status == 401:
                 self.detach()
                 self._try_connect()
                 fn = getattr(self._client, method)
@@ -195,17 +199,55 @@ class NotConnected(Exception):
     pass
 
 
-def guard(connection: Connection, handler, feature=None):
-    """Wrap a tool handler with connection and feature checks."""
+def _hint_for(code: str | None, retryable: bool) -> str | None:
+    """A short, actionable suggestion for the agent - only for cases
+    where the message text alone does not already make the remedy
+    obvious (a retryable engine message like bridge_timeout's already
+    says "the emulator may be paused" itself)."""
+    if retryable:
+        return "This may be transient - the same call can succeed on retry."
+    if code == "unauthorized":
+        return "The token may be stale; bridge_connect will re-attach with a fresh one."
+    if code == "not_connected":
+        return "Call bridge_status to check reachability, or bridge_start to spawn an instance."
+    return None
+
+
+def to_error_result(message: str, *, tool: str | None = None,
+                    route: str | None = None, code: str | None = None,
+                    retryable: bool = False) -> types.CallToolResult:
+    """Build a CallToolResult(isError=True). This is the only way to get
+    isError set at all: the MCP SDK's call_tool wrapper hardcodes
+    isError=False for any handler return value that is not already a
+    CallToolResult (see mcp.server.lowlevel.server.Server.call_tool)."""
+    bits = [b for b in (tool, route) if b]
+    prefix = f"[{' '.join(bits)}] " if bits else ""
+    text = f"{prefix}{message}"
+    hint = _hint_for(code, retryable)
+    if hint:
+        text = f"{text} {hint}"
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)],
+        isError=True,
+    )
+
+
+def guard(connection: Connection, handler, feature=None, tool_name=None):
+    """Wrap a tool handler with connection and feature checks. Failures
+    return CallToolResult(isError=True): an agent must be able to tell
+    a refusal from a success without parsing the text."""
     def guarded(args):
         try:
             connection.ensure_connected()
             if feature and not connection.features.get(feature):
-                return [types.TextContent(
-                    type="text",
-                    text=f"Feature '{feature}' is not enabled in the running instance.",
-                )]
+                return to_error_result(
+                    f"Feature '{feature}' is not enabled in the running instance.",
+                    tool=tool_name, code="feature_disabled",
+                )
             return handler(args)
         except NotConnected as e:
-            return [types.TextContent(type="text", text=str(e))]
+            return to_error_result(str(e), tool=tool_name, code="not_connected")
+        except DosboxError as e:
+            return to_error_result(e.message, tool=tool_name, route=e.route,
+                                   code=e.code, retryable=e.retryable)
     return guarded

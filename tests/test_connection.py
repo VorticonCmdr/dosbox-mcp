@@ -6,7 +6,7 @@ import httpx
 import mcp.types as types
 import pytest
 
-from dosbox_mcp.client import DosboxClient
+from dosbox_mcp.client import DosboxClient, DosboxError
 from dosbox_mcp.config import Config
 from dosbox_mcp.connection import Connection, NotConnected, guard
 
@@ -91,8 +91,10 @@ def test_guard_returns_error_when_not_connected():
 
     guarded = guard(conn, handler)
     result = guarded({})
-    assert len(result) == 1
-    assert "No API token" in result[0].text
+    assert isinstance(result, types.CallToolResult)
+    assert result.isError
+    assert len(result.content) == 1
+    assert "No API token" in result.content[0].text
 
 
 def test_guard_returns_error_when_feature_disabled():
@@ -103,8 +105,10 @@ def test_guard_returns_error_when_feature_disabled():
 
     guarded = guard(conn, handler, feature="freeze")
     result = guarded({})
-    assert len(result) == 1
-    assert "not enabled" in result[0].text
+    assert isinstance(result, types.CallToolResult)
+    assert result.isError
+    assert len(result.content) == 1
+    assert "not enabled" in result.content[0].text
 
 
 def test_guard_passes_through_when_feature_enabled():
@@ -204,3 +208,136 @@ class TestStatus:
         conn = _connectable({"features": {}, "mcp_protocol": "1.0"})
         conn.ensure_connected()
         assert TOKEN not in repr(conn.status())
+
+
+class TestStaleTokenRetry:
+    def test_retries_on_status_not_message_substring(self, tmp_path, monkeypatch):
+        """Regression test for the exact bug 1.5 fixes: detecting a
+        stale token used to check '"401" in str(e)'. A 401 whose
+        message never contains the digits '401' must still trigger the
+        reattach."""
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        fresh_token = "1" * 64
+        token_file = tmp_path / "api_token"
+        token_file.write_text(fresh_token)
+
+        calls = []
+
+        def handler(request):
+            auth = request.headers.get("authorization")
+            calls.append(auth)
+            if auth == f"Bearer {fresh_token}":
+                return httpx.Response(200, json={
+                    "version": "0.84-test", "features": {},
+                    "mcp_protocol": "1.0",
+                })
+            # No literal "401" substring anywhere in this body.
+            return httpx.Response(401, json={
+                "error": "token rejected", "error_code": "unauthorized",
+            })
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN,
+                        token_file=token_file)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+
+        assert conn.connected
+        assert calls == [f"Bearer {TOKEN}", f"Bearer {fresh_token}"]
+
+    def test_non_401_error_does_not_retry(self):
+        # A 4xx/5xx that is not literally a stale-token 401 must not be
+        # swallowed into a silent reattach loop.
+        calls = []
+
+        def handler(request):
+            calls.append(1)
+            return httpx.Response(403, json={
+                "error": "forbidden", "error_code": "forbidden_host",
+            })
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        with pytest.raises(NotConnected):
+            conn.ensure_connected()
+        assert len(calls) == 1
+
+
+class TestTransportErrorHandling:
+    def test_try_connect_treats_timeout_like_connect_error(self):
+        def handler(request):
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        with pytest.raises(NotConnected, match="Cannot reach dosbox"):
+            conn.ensure_connected()
+
+    def test_call_detaches_and_raises_not_connected_on_timeout(self):
+        conn = _connectable({"features": {}, "mcp_protocol": "1.0"})
+        conn.ensure_connected()
+        assert conn.connected
+
+        def timeout_handler(request):
+            raise httpx.ReadTimeout("timed out", request=request)
+        conn._client = DosboxClient(conn.base_url, TOKEN,
+                                    transport=httpx.MockTransport(timeout_handler))
+
+        with pytest.raises(NotConnected, match="stopped responding"):
+            conn.get("/api/v1/status")
+        assert not conn.connected
+
+
+class TestDosboxErrorThroughGuard:
+    def test_guard_converts_dosbox_error_into_error_result(self):
+        conn = _make_conn(token=TOKEN, features={})
+
+        def handler(args):
+            raise DosboxError(400, "invalid_argument",
+                              "port must be 0x0000..0xFFFF",
+                              route="GET /api/v1/io/port")
+
+        guarded = guard(conn, handler, tool_name="port_read")
+        result = guarded({})
+        assert isinstance(result, types.CallToolResult)
+        assert result.isError
+        text = result.content[0].text
+        assert "port_read" in text
+        assert "GET /api/v1/io/port" in text
+        assert "port must be 0x0000..0xFFFF" in text
+
+    def test_guard_surfaces_retryable_hint_for_bridge_timeout(self):
+        conn = _make_conn(token=TOKEN, features={})
+
+        def handler(args):
+            raise DosboxError(503, "bridge_timeout",
+                              "Command execution timed out", retryable=True)
+
+        guarded = guard(conn, handler)
+        result = guarded({})
+        assert result.isError
+        assert "retry" in result.content[0].text.lower()
+
+    def test_a_401_that_persists_through_reconnect_still_surfaces_as_an_error(self):
+        # call() detaches and retries once on 401 (Connection.call);
+        # that retry goes through ensure_connected() -> _try_connect(),
+        # which drops the stale token and requires a fresh one to
+        # proceed at all. With none available it raises NotConnected
+        # rather than looping forever - either way (NotConnected here,
+        # or a DosboxError had a fresh token also been rejected), guard()
+        # must not let a persistent auth failure read as success.
+        def handler(request):
+            return httpx.Response(401, json={
+                "error": "still unauthorized", "error_code": "unauthorized",
+            })
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+
+        def handler_fn(args):
+            return conn.get("/api/v1/status")
+
+        guarded = guard(conn, handler_fn, tool_name="dosbox_status")
+        result = guarded({})
+        assert isinstance(result, types.CallToolResult)
+        assert result.isError
+        assert "dosbox_status" in result.content[0].text

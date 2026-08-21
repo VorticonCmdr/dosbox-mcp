@@ -4,6 +4,7 @@
 
 import json
 
+import mcp.types as types
 import pytest
 
 from dosbox_mcp.config import Config
@@ -64,7 +65,7 @@ class FakeManager:
     def pid(self):
         return 4242 if self._running else None
 
-    def start(self, token_deadline=30.0):
+    def start(self, deadline_seconds=30.0):
         self.calls.append("start")
         if self._running:
             raise LifecycleError("an instance is already managed")
@@ -84,8 +85,19 @@ class FakeManager:
 
 
 def _text(result):
+    # Success paths still return a plain content list; failure paths
+    # (since 1.5) return CallToolResult(isError=True) - the only shape
+    # the MCP SDK will actually mark as an error (see
+    # dosbox_mcp.connection.to_error_result).
+    if isinstance(result, types.CallToolResult):
+        assert len(result.content) == 1
+        return result.content[0].text
     assert len(result) == 1
     return result[0].text
+
+
+def _is_error(result) -> bool:
+    return isinstance(result, types.CallToolResult) and result.isError
 
 
 class TestVersionStatusHelp:
@@ -126,8 +138,9 @@ class TestConnectDisconnect:
 
     def test_connect_reports_precise_failure(self):
         conn = FakeConn(fail_with="Instance found at X but no usable token")
-        text = _text(_connect(conn, FakeManager(), "full"))
-        assert "no usable token" in text
+        result = _connect(conn, FakeManager(), "full")
+        assert _is_error(result)
+        assert "no usable token" in _text(result)
 
 
 class TestStartStop:
@@ -139,17 +152,19 @@ class TestStartStop:
 
     def test_start_error_text_when_already_running(self):
         manager = FakeManager(running=True)
-        text = _text(_start(FakeConn(), manager))
-        assert "already managed" in text
+        result = _start(FakeConn(), manager)
+        assert _is_error(result)
+        assert "already managed" in _text(result)
 
     def test_start_reports_spawn_failure(self):
         manager = FakeManager()
 
-        def boom(token_deadline=30.0):
+        def boom(deadline_seconds=30.0):
             raise SpawnError("engine produced no token within 30.0s")
         manager.start = boom
-        text = _text(_start(FakeConn(), manager))
-        assert "no token within" in text
+        result = _start(FakeConn(), manager)
+        assert _is_error(result)
+        assert "no token within" in _text(result)
 
     def test_stop_stops_and_detaches(self):
         conn = FakeConn()
@@ -161,8 +176,9 @@ class TestStartStop:
         assert "stopped" in text.lower()
 
     def test_stop_refusal_passes_through(self):
-        text = _text(_stop(FakeConn(), FakeManager(running=False)))
-        assert "no managed instance" in text
+        result = _stop(FakeConn(), FakeManager(running=False))
+        assert _is_error(result)
+        assert "no managed instance" in _text(result)
 
 
 class TestLogs:
@@ -174,8 +190,9 @@ class TestLogs:
         assert "untrusted" in text.lower()
 
     def test_logs_error_passes_through(self):
-        text = _text(_logs(FakeManager(), {}))
-        assert "no output captured" in text
+        result = _logs(FakeManager(), {})
+        assert _is_error(result)
+        assert "no output captured" in _text(result)
 
 
 class TestSetup:
@@ -195,14 +212,16 @@ class TestSetup:
     def test_setup_rejects_protected_keys(self, args, tmp_path, monkeypatch):
         path = tmp_path / "config.toml"
         monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(path))
-        text = _text(_setup(args))
-        assert "human-edited" in text
+        result = _setup(args)
+        assert _is_error(result)
+        assert "human-edited" in _text(result)
         assert not path.exists()
 
     def test_setup_rejects_bad_values(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(tmp_path / "c.toml"))
-        text = _text(_setup({"port": 99999}))
-        assert "out of range" in text
+        result = _setup({"port": 99999})
+        assert _is_error(result)
+        assert "out of range" in _text(result)
 
 
 class TestSwagger:
