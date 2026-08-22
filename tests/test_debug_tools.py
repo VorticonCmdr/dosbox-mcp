@@ -7,6 +7,7 @@ import json
 from dosbox_mcp.tools.debug import (
     _breakpoint_add,
     _breakpoint_delete,
+    _disassemble,
     _run_to,
     _step,
     _step_over,
@@ -130,6 +131,15 @@ def test_breakpoint_add_posts_args_straight_through_including_condition_and_igno
     assert client.last_method == "post"
     assert client.last_path == "/api/v1/debug/breakpoints"
     assert client.last_kwargs["json"] == args
+
+
+def test_disassemble_builds_the_path_from_segment_offset_and_count():
+    client = _FakeClient({"instructions": [], "truncated": False})
+
+    _disassemble(client, {"segment": 0xF000, "offset": 0x100, "count": 10})
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/debug/disassemble/61440/256/10"
 
 
 def test_breakpoint_delete_with_id_sends_only_id():

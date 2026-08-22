@@ -305,6 +305,45 @@ def register(server, client, add_tool, feature=None):
         feature=feature,
     )
 
+    add_tool(
+        name="debug_disassemble",
+        description=(
+            "Decode x86 instructions to assembly text, starting at "
+            "segment:offset. Unlike every other debug_* tool, this doesn't "
+            "need the engine's debugger capability - it works on any build, "
+            "paused or running, since decoding bytes into text has nothing "
+            "to do with breakpoints or single-stepping. Each instruction's "
+            "'target' is the absolute address a relative branch (Jcc, JMP, "
+            "CALL, LOOP*, JCXZ) jumps to, or null for anything else - "
+            "including indirect/far branches, where 'text' still renders "
+            "correctly but there's no separate address to read. 'bytes' is "
+            "the raw instruction bytes, base64. Stops early (truncated:true) "
+            "rather than decode an instruction that would run past the end "
+            "of emulated memory."
+        ),
+        read_only=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "segment": {
+                    "type": "integer",
+                    "description": "Segment (0x0000..0xFFFF).",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Offset.",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "Instructions to decode (1-256).",
+                },
+            },
+            "required": ["segment", "offset", "count"],
+        },
+        handler=lambda args: _disassemble(client, args),
+        feature="disassemble",
+    )
+
 
 def _status(client):
     import mcp.types as types
@@ -376,3 +415,11 @@ def _breakpoint_delete(client, args):
     else:
         result = client.delete("/api/v1/debug/breakpoints")
     return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _disassemble(client, args):
+    import mcp.types as types
+    path = (f"/api/v1/debug/disassemble/{args['segment']}/"
+            f"{args['offset']}/{args['count']}")
+    result = client.get(path)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
