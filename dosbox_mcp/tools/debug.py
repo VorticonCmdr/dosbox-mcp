@@ -39,10 +39,73 @@ def register(server, client, add_tool, feature=None):
 
     add_tool(
         name="debug_step",
-        description="Execute one instruction and pause again.",
+        description=(
+            "Execute one instruction (or count, up to 64) and pause again. "
+            "Only breakpoints already armed by a prior debug_continue are "
+            "honored mid-burst with count > 1 - one added since is invisible "
+            "until the next continue - and IRQs are serviced only after the "
+            "whole burst, not between each instruction, so a large count "
+            "isn't equivalent to that many separate debug_step calls."
+        ),
+        read_only=False,
+        schema={
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "description": "Instructions to execute (1-64, default 1).",
+                },
+            },
+        },
+        handler=lambda args: _step(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="debug_step_over",
+        description=(
+            "Step over the current instruction: if it's a call/int/loop/rep, "
+            "run past it in one call instead of single-stepping through "
+            "everything it does, by planting a one-shot breakpoint right "
+            "after it and resuming. Like debug_continue, the actual stop "
+            "happens arbitrarily later (poll debug_wait with the returned "
+            "resumed_from_stop_id) - stepped_over:true means that's what "
+            "happened. If the current instruction isn't one of those kinds "
+            "(or the emulator wasn't paused), it falls back to a plain step "
+            "instead: stepped_over:false, stepped:true, and stop already "
+            "has the new record synchronously (or stepped:false if nothing "
+            "was paused to begin with)."
+        ),
         read_only=False,
         schema={"type": "object", "properties": {}},
-        handler=lambda args: _step(client),
+        handler=lambda args: _step_over(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="debug_run_to",
+        description=(
+            "Run until execution reaches segment:offset, by planting a "
+            "one-shot breakpoint there and resuming - like debug_continue, "
+            "the actual stop happens arbitrarily later (poll debug_wait "
+            "with the returned resumed_from_stop_id)."
+        ),
+        read_only=False,
+        schema={
+            "type": "object",
+            "properties": {
+                "segment": {
+                    "type": "integer",
+                    "description": "Target segment (0x0000..0xFFFF).",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Target offset.",
+                },
+            },
+            "required": ["segment", "offset"],
+        },
+        handler=lambda args: _run_to(client, args),
         feature=feature,
     )
 
@@ -124,6 +187,10 @@ def register(server, client, add_tool, feature=None):
                     "type": "integer",
                     "description": "AL value to match for 'interrupt' breakpoints (0x00..0xFF). Omit to match any AL. Only meaningful with 'ah' also set.",
                 },
+                "once": {
+                    "type": "boolean",
+                    "description": "Remove this breakpoint automatically the first time it fires (default false).",
+                },
             },
             "required": ["type"],
         },
@@ -134,9 +201,10 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="debug_breakpoint_list",
         description=(
-            "List all breakpoints. Each entry's 'index' is its position in "
-            "this list, not a stable id -- it shifts whenever a breakpoint "
-            "is added or removed. Re-list before deleting by index."
+            "List all breakpoints. Each entry's 'id' is a stable identifier "
+            "(never reused or renumbered) - prefer it for debug_breakpoint_delete. "
+            "'index' is only its current position in this list, which shifts "
+            "whenever any breakpoint is added or removed."
         ),
         read_only=True,
         schema={"type": "object", "properties": {}},
@@ -147,16 +215,21 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="debug_breakpoint_delete",
         description=(
-            "Remove a breakpoint by its current index (see "
-            "debug_breakpoint_list), or omit index to clear all."
+            "Remove a breakpoint by id (stable, see debug_breakpoint_list) "
+            "or by its current index. Specify exactly one of the two, or "
+            "omit both to clear all breakpoints."
         ),
         read_only=False,
         schema={
             "type": "object",
             "properties": {
+                "id": {
+                    "type": "integer",
+                    "description": "Stable id to remove (see debug_breakpoint_list). Mutually exclusive with 'index'.",
+                },
                 "index": {
                     "type": "integer",
-                    "description": "Index to remove. Omit to clear all breakpoints.",
+                    "description": "Current list position to remove. Mutually exclusive with 'id'.",
                 },
             },
         },
@@ -183,9 +256,21 @@ def _continue(client):
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _step(client):
+def _step(client, args):
     import mcp.types as types
-    result = client.post("/api/v1/debug/step")
+    result = client.post("/api/v1/debug/step", json=args)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _step_over(client):
+    import mcp.types as types
+    result = client.post("/api/v1/debug/step_over")
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _run_to(client, args):
+    import mcp.types as types
+    result = client.post("/api/v1/debug/run_to", json=args)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
@@ -213,9 +298,13 @@ def _breakpoint_list(client):
 
 def _breakpoint_delete(client, args):
     import mcp.types as types
-    if "index" in args:
-        result = client.delete("/api/v1/debug/breakpoints",
-                               json={"index": args["index"]})
+    # Pass through whichever of 'id'/'index' the caller sent, rather than
+    # picking one - if a confused caller sends both, the engine's own
+    # validation rejects it with a clear error instead of one being
+    # silently ignored.
+    body = {k: args[k] for k in ("id", "index") if k in args}
+    if body:
+        result = client.delete("/api/v1/debug/breakpoints", json=body)
     else:
         result = client.delete("/api/v1/debug/breakpoints")
     return [types.TextContent(type="text", text=json.dumps(result))]
