@@ -369,9 +369,13 @@ def register_search(server, client, add_tool, feature=None):
     add_tool(
         name="mem_search",
         description=(
-            "Scan a range of guest memory for a value. Returns matching "
-            "physical addresses. Width is 1 (byte), 2 (word), or 4 (dword), "
-            "little-endian."
+            "Scan a range of guest memory for a value. Width is 1 (byte), "
+            "2 (word), or 4 (dword), little-endian. Returns 'matches' "
+            "(up to 'limit' physical addresses), 'total' (the real match "
+            "count, which can exceed what's returned) and 'truncated' "
+            "(whether it did) - a common byte value over a large range "
+            "can match far more times than are useful to see at once, so "
+            "check 'truncated' rather than assume 'matches' is complete."
         ),
         read_only=True,
         schema={
@@ -393,6 +397,10 @@ def register_search(server, client, add_tool, feature=None):
                     "type": "integer",
                     "description": "Width in bytes: 1, 2, or 4 (default 1).",
                     "default": 1,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max matches to return (1-4096, default 256).",
                 },
             },
             "required": ["start", "end", "value"],
@@ -422,6 +430,8 @@ def _mem_search(client, args):
         "value": args["value"],
         "width": args.get("width", 1),
     }
+    if "limit" in args:
+        body["limit"] = args["limit"]
     result = client.post("/api/v1/memory/search", json=body)
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 

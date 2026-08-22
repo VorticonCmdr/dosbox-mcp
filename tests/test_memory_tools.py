@@ -13,6 +13,7 @@ from dosbox_mcp.tools.memory import (
     MAX_RENDERED_VIEW_BYTES,
     _mem_path,
     _mem_read,
+    _mem_search,
     _mem_write,
     _render_hex,
     _resolve_offset,
@@ -40,6 +41,12 @@ class _FakeClient:
         self.last_kwargs = kwargs
         if self._put_error is not None:
             raise self._put_error
+        return self._response
+
+    def post(self, path, **kwargs):
+        self.last_method = "post"
+        self.last_path = path
+        self.last_kwargs = kwargs
         return self._response
 
 
@@ -386,3 +393,29 @@ def test_mem_write_accepts_data_at_exactly_the_length_cap():
     result = _mem_write(client, {"offset": 0, "data": at_cap})
     assert isinstance(result, list)
     assert client.last_method == "put"
+
+
+# ---------------------------------------------------------------------------
+# mem_search
+# ---------------------------------------------------------------------------
+
+
+def test_mem_search_omits_limit_when_not_given():
+    client = _FakeClient({"matches": [], "total": 0, "truncated": False})
+    _mem_search(client, {"start": 0, "end": 16, "value": 1})
+    assert "limit" not in client.last_kwargs["json"]
+
+
+def test_mem_search_passes_limit_through():
+    client = _FakeClient({"matches": [0], "total": 1, "truncated": False})
+    _mem_search(client, {"start": 0, "end": 16, "value": 1, "limit": 10})
+    assert client.last_kwargs["json"]["limit"] == 10
+
+
+def test_mem_search_returns_total_and_truncated():
+    response = {"matches": [0, 4], "total": 500, "truncated": True}
+    client = _FakeClient(response)
+    result = _mem_search(client, {"start": 0, "end": 1000, "value": 1})
+    body = json.loads(result[0].text)
+    assert body["total"] == 500
+    assert body["truncated"] is True

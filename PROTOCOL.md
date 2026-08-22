@@ -145,6 +145,13 @@ Semantics that are part of the contract, not just the schemas:
   `{"memory": {"addr", "data"}}` - `data` is the real current bytes,
   not an error body, so a client can re-read and retry instead of
   guessing. Omitting `If-Match` writes unconditionally, as before.
+- `POST /memory/search` caps how many matches it returns: `matches` has
+  at most `limit` entries (request field, default 256, max 4096, not
+  the scan span - the span cap is separately 16 MB). `total` reports
+  the real match count even when it exceeds `limit`, and `truncated` is
+  `total > matches.length`. A caller that only reads `matches` still
+  gets a valid, if possibly incomplete, result - check `truncated`
+  rather than assume completeness.
 - The frame returned by `video/frame` is the clean emulator output:
   on-screen overlays the engine draws for the human watching are never
   in it.
@@ -240,3 +247,11 @@ changed and the version it produces.
   Non-blocking pause/continue/step and the engine-side `core =
   normal`/`full` requirement for breakpoints to fire are part of the
   contract, not just implementation notes.
+- **1.2.0 (draft)** - `POST /memory/search` gains `limit` (request,
+  default 256, max 4096) and `total`/`truncated` (response, additive).
+  A genuine behavior change, not just documentation: previously
+  `matches` held every match in the scanned span with no cap, which
+  could be megabytes of response for a common byte value over a large
+  range; a caller that only reads `matches` and doesn't pass `limit`
+  now gets at most 256 by default. `total`/`truncated` exist precisely
+  so that change is detectable rather than a silent truncation.
