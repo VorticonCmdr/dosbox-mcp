@@ -11,10 +11,12 @@ from dosbox_mcp.client import DosboxError
 from dosbox_mcp.tools.memory import (
     MAX_LENGTH_BYTES,
     MAX_RENDERED_VIEW_BYTES,
+    _mem_diff,
     _mem_path,
     _mem_read,
     _mem_scan,
     _mem_search,
+    _mem_snapshot,
     _mem_write,
     _render_hex,
     _resolve_offset,
@@ -458,3 +460,63 @@ def test_mem_scan_returns_total_and_truncated():
     body = json.loads(result[0].text)
     assert body["total"] == 500
     assert body["truncated"] is True
+
+
+# ---------------------------------------------------------------------------
+# mem_snapshot / mem_diff
+# ---------------------------------------------------------------------------
+
+
+def test_mem_snapshot_posts_start_and_end():
+    client = _FakeClient({"handle": 1, "start": 0, "end": 16, "bytes": 16})
+    _mem_snapshot(client, {"start": 0, "end": 16})
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/memory/snapshot"
+    assert client.last_kwargs["json"] == {"start": 0, "end": 16}
+
+
+def test_mem_snapshot_returns_handle():
+    client = _FakeClient({"handle": 42, "start": 0, "end": 16, "bytes": 16})
+    result = _mem_snapshot(client, {"start": 0, "end": 16})
+    body = json.loads(result[0].text)
+    assert body["handle"] == 42
+
+
+def test_mem_diff_posts_handle_and_op():
+    client = _FakeClient({"matches": [], "total": 0, "truncated": False,
+                          "candidates": 0})
+    _mem_diff(client, {"handle": 1, "op": "changed"})
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/memory/diff"
+    assert client.last_kwargs["json"] == {"handle": 1, "op": "changed"}
+
+
+def test_mem_diff_omits_width_and_limit_when_not_given():
+    client = _FakeClient({"matches": [], "total": 0, "truncated": False,
+                          "candidates": 0})
+    _mem_diff(client, {"handle": 1, "op": "unchanged"})
+    assert "width" not in client.last_kwargs["json"]
+    assert "limit" not in client.last_kwargs["json"]
+
+
+def test_mem_diff_passes_width_and_limit_through():
+    client = _FakeClient({"matches": [], "total": 0, "truncated": False,
+                          "candidates": 0})
+    _mem_diff(client, {"handle": 1, "op": "increased", "width": 2, "limit": 10})
+    assert client.last_kwargs["json"]["width"] == 2
+    assert client.last_kwargs["json"]["limit"] == 10
+
+
+def test_mem_diff_returns_candidates_and_total():
+    response = {
+        "matches": [{"addr": 100, "value": 5}],
+        "total": 3,
+        "truncated": False,
+        "candidates": 3,
+    }
+    client = _FakeClient(response)
+    result = _mem_diff(client, {"handle": 1, "op": "changed"})
+    body = json.loads(result[0].text)
+    assert body["total"] == 3
+    assert body["candidates"] == 3
+    assert body["matches"][0]["addr"] == 100

@@ -471,6 +471,120 @@ def register_search(server, client, add_tool, feature=None):
     )
 
 
+def register_snapshot(server, client, add_tool, feature=None):
+    add_tool(
+        name="mem_snapshot",
+        description=(
+            "Capture a range of guest memory (up to 16 MB) so it can be "
+            "compared against later with mem_diff - the first step of "
+            "the snapshot-and-refine workflow for finding an unknown "
+            "value's address (e.g. a game's health or gold counter): "
+            "snapshot, change the value in-game, mem_diff with "
+            "op='changed' (or 'increased'/'decreased' if you know the "
+            "direction) to get a candidate list, change the value "
+            "again, mem_diff the same handle again to narrow further. "
+            "Returns a 'handle' to pass to mem_diff."
+        ),
+        read_only=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "start": {
+                    "type": "integer",
+                    "description": "Start of the range to capture (physical address).",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End of the range (exclusive).",
+                },
+            },
+            "required": ["start", "end"],
+        },
+        handler=lambda args: _mem_snapshot(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mem_diff",
+        description=(
+            "Compare current guest memory against a mem_snapshot handle "
+            "and narrow it to whatever survives. The first call on a "
+            "handle compares the whole captured range against fresh "
+            "memory; every call after that only re-checks the "
+            "addresses that survived the previous call, so repeated "
+            "calls on the same handle progressively refine toward the "
+            "value's real address - each call re-baselines: 'increased' "
+            "means increased since the *previous* mem_diff call, not "
+            "since the original snapshot. 'op' is 'changed', "
+            "'unchanged' (or its synonym 'equals'), 'increased', or "
+            "'decreased'. 'width' (1, 2, or 4 bytes, default 1) is only "
+            "settable on a handle's first mem_diff call - it locks in "
+            "for every later refine call on that handle. Returns "
+            "'matches' (up to 'limit' {addr, value} pairs), 'total' "
+            "(the true number of survivors this round), 'truncated' "
+            "(whether 'matches' is incomplete), and 'candidates' (how "
+            "many addresses are being tracked for the next refine call "
+            "- can be less than 'total' if there were more than 65536 "
+            "true survivors, in which case the ones kept are arbitrary "
+            "and may not include the address you're actually looking "
+            "for - treat a heavily-truncated first round as a sign to "
+            "narrow the op or range and take a new snapshot, not as "
+            "something to keep refining). A handle that narrows to zero "
+            "candidates is gone; the next mem_diff on it fails."
+        ),
+        read_only=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "integer",
+                    "description": "Handle returned by mem_snapshot.",
+                },
+                "op": {
+                    "type": "string",
+                    "enum": ["changed", "unchanged", "increased",
+                             "decreased", "equals"],
+                    "description": "How to compare each candidate's value to what was recorded for it.",
+                },
+                "width": {
+                    "type": "integer",
+                    "enum": [1, 2, 4],
+                    "description": (
+                        "Comparison width in bytes (default 1). Only "
+                        "meaningful on a handle's first mem_diff call - "
+                        "it locks in from then on."
+                    ),
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max matches to return (1-4096, default 256).",
+                },
+            },
+            "required": ["handle", "op"],
+        },
+        handler=lambda args: _mem_diff(client, args),
+        feature=feature,
+    )
+
+
+def _mem_snapshot(client, args):
+    import mcp.types as types
+    body = {"start": args["start"], "end": args["end"]}
+    result = client.post("/api/v1/memory/snapshot", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _mem_diff(client, args):
+    import mcp.types as types
+    body = {"handle": args["handle"], "op": args["op"]}
+    if "width" in args:
+        body["width"] = args["width"]
+    if "limit" in args:
+        body["limit"] = args["limit"]
+    result = client.post("/api/v1/memory/diff", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
 def _mem_search(client, args):
     import mcp.types as types
     body = {

@@ -117,7 +117,7 @@ verify the advertised contract against it.
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control |
 | input | `input/sequence`, `input/type` | named-key sequences; paced string typing (feature: input) |
-| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan` | guest physical memory (feature: memory) |
+| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff` | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
 | cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
@@ -165,6 +165,36 @@ Semantics that are part of the contract, not just the schemas:
   inside the scanned range, the scan reads through its patched trap
   byte to the real instruction underneath; a plain memory read over the
   same address sees the trap, not the original byte.
+- `POST /memory/snapshot {start, end}` captures a range (max 16 MB) and
+  returns a `handle`. `POST /memory/diff {handle, op}` compares current
+  memory against it: `op` is `changed`, `unchanged` (or its synonym
+  `equals`), `increased`, or `decreased`. The first diff call on a
+  handle compares the whole captured range; every call after that
+  re-checks only the addresses that survived the previous call and
+  *re-baselines* - `increased` means increased since the previous diff
+  call on that handle, not since the original snapshot. This is what
+  makes repeated diff calls on the same handle a refine loop, not a
+  fixed comparison against one fixed baseline. `width` (1, 2, or 4
+  bytes, default 1) is settable only on a handle's first diff call and
+  locked in from then on; a later call naming a different width is
+  rejected. The response is `{matches, total, truncated, candidates}`:
+  `matches`/`total`/`truncated` follow the same contract as
+  `memory/search`'s, and `candidates` is how many addresses are being
+  tracked for the *next* diff call - it can be less than `total` if
+  more than 65536 addresses genuinely survived this round, since only
+  that many are kept as trackable candidates (an arbitrary subset with
+  no relation to which address a caller is actually looking for - a
+  round this unselective should prompt a narrower op/range and a fresh
+  snapshot, not further refinement of what was kept). A handle that
+  narrows to zero candidates is removed; a diff on a handle that
+  doesn't currently exist (never created, evicted, or removed this way)
+  returns 404, not 400 - the one memory route that does, matching how
+  this codebase treats other client-supplied ids/handles that no longer
+  reference a live resource.
+  Snapshots are capped by total bytes across every live snapshot (32
+  MB, LRU-evicted, not capped by count) plus a backstop cap on the
+  number of live snapshots - a client should not assume a snapshot
+  survives indefinitely if it stops calling diff on it.
 - The frame returned by `video/frame` is the clean emulator output:
   on-screen overlays the engine draws for the human watching are never
   in it.
@@ -273,3 +303,12 @@ changed and the version it produces.
   and `??` wildcards), the mechanism a client uses to locate a Ghidra
   function's live address from its byte pattern. Same `matches`/
   `total`/`truncated`/`limit` contract as `memory/search`.
+- **1.4.0 (draft)** - adds `POST /memory/snapshot` and
+  `POST /memory/diff` under the existing `memory` feature flag: a
+  stateful snapshot-and-refine workflow (capture a range, then narrow
+  it across repeated diff calls) for locating an address whose byte
+  pattern isn't known ahead of time - a game's health or gold counter,
+  not a Ghidra-analyzed function. Snapshots are process-lifetime state
+  with their own byte and entry caps (client-visible via
+  `dosbox/info`'s `capabilities.memory.limits`), not part of the
+  request/response contract of any other route.
