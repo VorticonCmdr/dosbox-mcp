@@ -2,9 +2,11 @@
 # License: GPL-2.0-or-later. Contact: dosbox-mcp@trinity2k.net
 #
 
+import asyncio
 import json
 
 import httpx
+import mcp.types as types
 
 from dosbox_mcp.config import Config
 from dosbox_mcp.connection import Connection
@@ -50,8 +52,8 @@ def test_all_tools_registered_regardless_of_features():
               "debug_breakpoint_add", "debug_breakpoint_list", "debug_breakpoint_delete",
               "debug_backtrace", "debug_step_out"):
         assert t in names
-    for t in ("debug_map_set_base", "debug_map_to_live", "debug_map_to_ghidra",
-              "debug_map_status"):
+    for t in ("debug_map_set_base", "debug_map_auto", "debug_map_to_live",
+              "debug_map_to_ghidra", "debug_map_status"):
         assert t in names
 
 
@@ -72,8 +74,21 @@ class TestCapabilityModes:
         assert "script_run" not in names
         assert "drive_swap" not in names
         assert "port_write" not in names
-        assert "debug_map_set_base" not in names
+        # debug_map_set_base mutates only the bridge's own local
+        # address-mapping bookkeeping, never the connected engine or
+        # guest, so it's available in every mode - see
+        # _LOCAL_ONLY_GROUPS. debug_map_auto looks similar but reads
+        # live engine memory as part of deriving what to persist, so it
+        # does NOT get that exemption and needs full mode like any
+        # other engine-reaching mutation.
+        assert "debug_map_set_base" in names
+        assert "debug_map_auto" not in names
         assert "debug_step_out" not in names
+
+    def test_interact_still_requires_full_for_debug_map_auto(self):
+        names = _build(mode="interact").registered_tool_names()
+        assert "debug_map_set_base" in names
+        assert "debug_map_auto" not in names
 
     def test_interact_adds_input_media_script_but_not_surgery(self):
         names = _build(mode="interact").registered_tool_names()
@@ -92,11 +107,72 @@ class TestCapabilityModes:
         assert "mem_write" in names
         assert "port_write" in names
         assert "freeze_set" in names
+        assert "debug_map_auto" in names
 
     def test_unknown_mode_rejected(self):
         import pytest
         with pytest.raises(ValueError, match="mode"):
             _build(mode="root")
+
+
+def _call(server, name, args):
+    """Dispatch through the real MCP call_tool path (guard()/add_tool's
+    needs_connection included) rather than calling a tool module's
+    handler function directly - a bug in that wiring itself (e.g.
+    needs_connection left at its default) is invisible to a test that
+    bypasses it."""
+    handler = server.request_handlers[types.CallToolRequest]
+
+    async def go():
+        req = types.CallToolRequest(
+            method="tools/call",
+            params=types.CallToolRequestParams(name=name, arguments=args),
+        )
+        result = await handler(req)
+        ctr = result.root
+        return ctr.isError, ctr.content[0].text if ctr.content else None
+
+    return asyncio.run(go())
+
+
+class TestGhidraToolsDontNeedAConnection:
+    """debug_map_set_base/to_live/to_ghidra/status are pure client-side
+    arithmetic - unlike every other tool in this bridge, they must work
+    with no dosbox instance reachable at all (aug-2.16: these silently
+    required one anyway because needs_connection was left at add_tool's
+    default True)."""
+
+    def _disconnected_server(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        monkeypatch.setenv("DOSBOX_TOKEN_FILE", str(tmp_path / "no_token"))
+        monkeypatch.setenv("DOSBOX_MCP_GHIDRA_MAP", str(tmp_path / "ghidra_map.json"))
+        config = Config(base_url="http://127.0.0.1:8386", token=None)
+        return build_server(Connection(config), mode="full")
+
+    def test_status_works_with_no_connection(self, monkeypatch, tmp_path):
+        server = self._disconnected_server(monkeypatch, tmp_path)
+        is_error, text = _call(server, "debug_map_status", {})
+        assert not is_error
+        assert json.loads(text) == {"ranges": []}
+
+    def test_set_base_works_with_no_connection(self, monkeypatch, tmp_path):
+        server = self._disconnected_server(monkeypatch, tmp_path)
+        is_error, text = _call(server, "debug_map_set_base", {
+            "ghidra_address": 0, "live_segment": 0x1000, "live_offset": 0,
+            "ghidra_start": 0, "ghidra_end": 0x10, "label": "x",
+        })
+        assert not is_error, text
+
+    def test_debug_map_auto_does_need_a_connection(self, monkeypatch, tmp_path):
+        # The one tool in this module that genuinely talks to the engine
+        # - confirms the fix didn't just blanket-disable the guard.
+        server = self._disconnected_server(monkeypatch, tmp_path)
+        is_error, text = _call(server, "debug_map_auto", {
+            "pattern": "AA BB", "ghidra_address": 0,
+            "ghidra_start": 0, "ghidra_end": 0x10, "label": "x",
+        })
+        assert is_error
+        assert "not_connected" in text or "token" in text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -193,57 +269,6 @@ def test_cpu_read_registers_hits_state_route():
     result = _cpu_state(_FakeClient())
     body = json.loads(result[0].text)
     assert body["registers"]["cs"] == 0x2000
-
-
-class TestGhidraAddressMap:
-    """Bridge-side arithmetic, no engine call involved."""
-
-    def _fresh_state(self):
-        from dosbox_mcp.tools import ghidra
-        state = {"base_segment": None, "delta": None, "ghidra_anchor": None}
-        return ghidra, state
-
-    def test_translations_fail_before_a_base_is_set(self):
-        ghidra, state = self._fresh_state()
-        result = ghidra._to_live(state, {"ghidra_address": 0x150})
-        assert "No mapping set" in result[0].text
-
-    def test_set_base_then_roundtrip(self):
-        ghidra, state = self._fresh_state()
-        # .COM-style anchor: entry point 0x100 in both spaces, live CS 0x2000
-        ghidra._set_base(state, {
-            "ghidra_address": 0x100, "live_segment": 0x2000, "live_offset": 0x100,
-        })
-
-        live = json.loads(ghidra._to_live(state, {"ghidra_address": 0x150})[0].text)
-        assert live == {"segment": 0x2000, "offset": 0x150, "linear": 0x2000 * 16 + 0x150}
-
-        back = json.loads(ghidra._to_ghidra(state, {
-            "live_segment": 0x2000, "live_offset": 0x150,
-        })[0].text)
-        assert back == {"ghidra_address": 0x150}
-
-    def test_to_ghidra_refuses_a_different_segment(self):
-        ghidra, state = self._fresh_state()
-        ghidra._set_base(state, {
-            "ghidra_address": 0x100, "live_segment": 0x2000, "live_offset": 0x100,
-        })
-        result = json.loads(ghidra._to_ghidra(state, {
-            "live_segment": 0x3000, "live_offset": 0x150,
-        })[0].text)
-        assert "error" in result
-        assert "0x3000" in result["error"]
-
-    def test_status_reports_unset_and_set(self):
-        ghidra, state = self._fresh_state()
-        assert json.loads(ghidra._status(state)[0].text) == {"set": False}
-        ghidra._set_base(state, {
-            "ghidra_address": 0x100, "live_segment": 0x2000, "live_offset": 0x100,
-        })
-        status = json.loads(ghidra._status(state)[0].text)
-        assert status == {
-            "set": True, "base_segment": 0x2000, "ghidra_anchor": 0x100, "delta": 0,
-        }
 
 
 def test_script_run_sends_lua_as_text_not_json():

@@ -53,6 +53,17 @@ def default_config_path() -> Path:
     return Path(user_config_dir("dosbox-mcp")) / "config.toml"
 
 
+def default_ghidra_map_path() -> Path:
+    """Where debug_map_set_base/debug_map_auto persist Ghidra<->live
+    address-mapping ranges (delta and label only, never live_segment -
+    see tools/ghidra.py for why). DOSBOX_MCP_GHIDRA_MAP overrides for
+    tests and unusual setups."""
+    env = os.environ.get("DOSBOX_MCP_GHIDRA_MAP")
+    if env:
+        return Path(env)
+    return Path(user_config_dir("dosbox-mcp")) / "ghidra_map.json"
+
+
 def default_token_path() -> Path:
     """Where the engine's launcher writes the API token by default.
 
@@ -77,14 +88,26 @@ def default_token_path() -> Path:
     return base / "webserver" / "api_token"
 
 
+def resolved_token_path(token_file: Path | None = None) -> Path:
+    """Where read_token() will actually look: the given path, else
+    DOSBOX_TOKEN_FILE, else the engine's default location. Exposed so
+    callers that report the token file (e.g. session_info) show the
+    same path read_token() uses, even when not going through
+    Config.load()."""
+    if token_file is not None:
+        return token_file
+    env = os.environ.get("DOSBOX_TOKEN_FILE")
+    return Path(env) if env else default_token_path()
+
+
 def read_token(token_file: Path | None = None) -> str | None:
-    """Token from DOSBOX_API_TOKEN, else the given file, else the default
-    token file. Returns None if no token is available (dosbox not
-    running yet)."""
+    """Token from DOSBOX_API_TOKEN, else the given file, else
+    DOSBOX_TOKEN_FILE, else the default token file. Returns None if no
+    token is available (dosbox not running yet)."""
     env = os.environ.get("DOSBOX_API_TOKEN")
     if env:
         return env
-    path = token_file if token_file is not None else default_token_path()
+    path = resolved_token_path(token_file)
     if path.is_file():
         return path.read_text(encoding="utf-8").strip()
     return None

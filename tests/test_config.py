@@ -11,6 +11,7 @@ import pytest
 from dosbox_mcp.config import (
     Config,
     ToolProtectedKey,
+    default_ghidra_map_path,
     default_token_path,
     update_config_file,
     validate_base_url,
@@ -92,6 +93,19 @@ class TestDefaultTokenPath:
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
         path = default_token_path()
         assert path == tmp_path / "dosbox-automation" / "webserver" / "api_token"
+
+
+class TestDefaultGhidraMapPath:
+    def test_defaults_under_the_bridges_own_config_dir(self, monkeypatch):
+        monkeypatch.delenv("DOSBOX_MCP_GHIDRA_MAP", raising=False)
+        from platformdirs import user_config_dir
+        path = default_ghidra_map_path()
+        assert path == Path(user_config_dir("dosbox-mcp")) / "ghidra_map.json"
+
+    def test_env_override_wins(self, monkeypatch, tmp_path):
+        override = tmp_path / "custom_map.json"
+        monkeypatch.setenv("DOSBOX_MCP_GHIDRA_MAP", str(override))
+        assert default_ghidra_map_path() == override
 
 
 class TestConfigLoad:

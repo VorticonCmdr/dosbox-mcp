@@ -247,6 +247,17 @@ Semantics specific to this group:
   fires. This is an engine-side limitation, not a protocol one, but
   clients should surface it -- e.g. warn when `debug/breakpoints` is
   used while the engine's configured core is not `normal`/`full`.
+- `debug/breakpoints` POST rejects (400) an execute or memory
+  breakpoint's `segment`/`offset` -- and a memory-kind `condition`'s own
+  `segment`/`offset` -- when `segment*16+offset` falls outside the
+  engine's emulated memory. This is checked with the CPU's current
+  addressing mode in mind: while the guest is in protected mode, a
+  request the flat real-mode formula would reject may in fact resolve
+  through the GDT to a valid address, so the check does not apply there
+  and the request goes through unchecked, same as before this existed.
+  A client computing `segment`/`offset` itself (not just relaying an
+  agent's numbers) is not exempt from this -- see "Validation lives
+  engine-side" below.
 
 
 ## Conformance
@@ -312,3 +323,12 @@ changed and the version it produces.
   with their own byte and entry caps (client-visible via
   `dosbox/info`'s `capabilities.memory.limits`), not part of the
   request/response contract of any other route.
+- **1.5.0 (draft)** - `debug/breakpoints` POST now rejects (400) an
+  execute/memory breakpoint, or a memory-kind condition, whose
+  `segment`/`offset` resolves outside emulated memory (real-mode
+  addressing only - see the group's own semantics above for the
+  protected-mode carve-out). A genuine behavior change, not just
+  documentation: previously any `segment` (0..0xFFFF) and `offset`
+  (0..0xFFFFFFFF) combination was accepted and handed straight to the
+  engine, where the address computation can silently wrap into a small,
+  in-range-looking location instead of the one actually requested.

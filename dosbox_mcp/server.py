@@ -18,8 +18,23 @@ from .tools import bridge, session, screen, input as input_tools, memory, freeze
 # debugger, shutdown) needs "full".
 _INTERACT_GROUPS = {"input", "media", "script", "bridge"}
 
+# Groups whose non-read-only tools register in every mode, including
+# observe: their mutation is confined to the bridge process's own local
+# bookkeeping (e.g. debug_map_set_base's Ghidra address-mapping ranges)
+# and never reaches the connected engine or guest, so the mode's
+# read-only guarantee about the emulator holds regardless. This is an
+# unconditional bypass checked before read_only/mode at all (see
+# _mode_allows below) - a tool that reaches the engine in any way has no
+# business in one of these groups, whatever its read_only flag says.
+# debug_map_auto is deliberately registered under its own separate group
+# ("mapping_auto", server.py's ghidra.register_auto call) rather than
+# here, precisely because it does reach the engine.
+_LOCAL_ONLY_GROUPS = {"mapping"}
+
 
 def _mode_allows(mode: str, read_only: bool, group: str) -> bool:
+    if group in _LOCAL_ONLY_GROUPS:
+        return True
     if mode == "full":
         return True
     if read_only:
@@ -98,7 +113,21 @@ def build_server(conn, mode: str = "full", manager=None):
     cpu.register(server, conn, add_tool_for("cpu"), feature="cpu_control")
     cpu.register_state(server, conn, add_tool_for("cpu"), feature="cpu_registers")
     debug.register(server, conn, add_tool_for("debug"), feature="debugger")
-    ghidra.register(server, conn, add_tool_for("debug"), feature="debugger")
+    # debug_map_set_base/to_live/to_ghidra/status are pure client-side
+    # arithmetic - no engine call, so feature=None (they used to be
+    # gated behind feature="debugger", which made all four permanently
+    # refuse on a stock non-debugger build despite three of them never
+    # touching the engine at all) and group="mapping" is in
+    # _LOCAL_ONLY_GROUPS (above), so set_base's own local-state mutation
+    # survives observe mode too. debug_map_auto is registered separately,
+    # under its own group, deliberately NOT in _LOCAL_ONLY_GROUPS: it
+    # reads live engine memory (mem_scan, dos_memory_map) as part of
+    # deriving what to persist, so it stays gated to full mode like any
+    # other engine-reaching mutation - see ghidra.register_auto's own
+    # docstring.
+    ghidra_state = ghidra.register(server, conn, add_tool_for("mapping"))
+    ghidra.register_auto(server, conn, add_tool_for("mapping_auto"),
+                         ghidra_state, feature="memory")
     bridge.register(server, conn, add_tool_for("bridge"),
                     manager=manager, mode=mode, get_tools=get_tools)
 
