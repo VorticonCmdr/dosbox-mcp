@@ -47,6 +47,41 @@ def register(server, client, add_tool, feature=None):
     )
 
     add_tool(
+        name="debug_wait",
+        description=(
+            "Block until the debugger stops again (a breakpoint hit, "
+            "another pause, or a step), or timeout_ms elapses - one call "
+            "instead of polling debug_status. Pass since_stop_id from a "
+            "prior debug_status/debug_pause/debug_step/debug_continue "
+            "response (continue's is 'resumed_from_stop_id') so a stop "
+            "that already happened isn't missed. Returns {satisfied, "
+            "debugging, stop_id, reason, registers, linear_eip, "
+            "protected_mode, core, breakpoint, code_bytes}: reason is "
+            "'paused', 'breakpoint', 'step', or 'never_stopped' (the "
+            "debugger hasn't paused even once since the engine started); "
+            "code_bytes is 16 base64 bytes at CS:EIP. satisfied is false "
+            "on a genuine timeout - stop_id and the rest still describe "
+            "the latest known stop."
+        ),
+        read_only=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "since_stop_id": {
+                    "type": "integer",
+                    "description": "Wait for a stop newer than this. Omit to wait for any stop since server start.",
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Max wait, milliseconds (1-15000, default 5000).",
+                },
+            },
+        },
+        handler=lambda args: _wait(client, args),
+        feature=feature,
+    )
+
+    add_tool(
         name="debug_breakpoint_add",
         description=(
             "Add a breakpoint. Takes effect on the next debug_continue "
@@ -152,6 +187,16 @@ def _step(client):
     import mcp.types as types
     result = client.post("/api/v1/debug/step")
     return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _wait(client, args):
+    import mcp.types as types
+    timeout_ms = args.get("timeout_ms", 5000)
+    # httpx's timeout needs slack over the server-side deadline so the
+    # engine's own timeout fires first, not the transport's.
+    result = client.get("/api/v1/debug/wait", params=args,
+                        timeout=(timeout_ms / 1000.0) + 5.0)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
 def _breakpoint_add(client, args):
