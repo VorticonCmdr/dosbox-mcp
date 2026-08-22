@@ -156,7 +156,22 @@ def register(server, client, add_tool, feature=None):
             "DOS file-open call. Omit ah/al to match any value.\n"
             "- memory: stop on execution reaching segment:offset (as "
             "classified by the engine; distinct from a plain execute "
-            "breakpoint internally, same effect for stepping purposes)."
+            "breakpoint internally, same effect for stepping purposes).\n"
+            "ignore_count and condition make a hot breakpoint usable: skip "
+            "the first N hits (ignore_count), or only actually stop when a "
+            "register or memory value compares a certain way (condition). "
+            "A skipped hit still counts in hit_count (debug_breakpoint_list) "
+            "- it just doesn't stop the emulator. This costs a full "
+            "stop/resume cycle per skipped hit, so a condition on a very "
+            "hot address is slow, not free. Neither can combine with "
+            "once=true (a once-only breakpoint self-deletes on its first "
+            "match, before any condition/ignore_count could apply). Adding "
+            "a breakpoint at a location that already has one is refused "
+            "(409) whenever either carries an ignore_count or condition - "
+            "only the first match at a location is ever evaluated, so a "
+            "second breakpoint there would silently never get its own "
+            "checked; delete the existing one first if you meant to "
+            "replace it."
         ),
         read_only=False,
         schema={
@@ -191,6 +206,53 @@ def register(server, client, add_tool, feature=None):
                     "type": "boolean",
                     "description": "Remove this breakpoint automatically the first time it fires (default false).",
                 },
+                "ignore_count": {
+                    "type": "integer",
+                    "description": "Skip this many genuine hits before actually stopping (default 0). Cannot combine with once=true.",
+                },
+                "condition": {
+                    "type": "object",
+                    "description": (
+                        "Only actually stop when this holds (default: always stop on a "
+                        "genuine hit). Exactly one of 'register' or "
+                        "'segment'/'offset'/'width' - a register comparison or a "
+                        "memory-operand comparison. Both forms compare 'value' with "
+                        "'op', unsigned. Cannot combine with once=true."
+                    ),
+                    "properties": {
+                        "register": {
+                            "type": "string",
+                            "description": (
+                                "Register to compare: eax/ebx/ecx/edx/esi/edi/esp/ebp, "
+                                "ax/bx/cx/dx/si/di/sp/bp, al/bl/cl/dl/ah/bh/ch/dh, or "
+                                "cs/ds/es/ss/fs/gs. Mutually exclusive with "
+                                "segment/offset/width."
+                            ),
+                        },
+                        "segment": {
+                            "type": "integer",
+                            "description": "Segment for a memory-operand condition.",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Offset for a memory-operand condition.",
+                        },
+                        "width": {
+                            "type": "integer",
+                            "description": "Bytes to read for a memory-operand condition: 1, 2, or 4.",
+                        },
+                        "op": {
+                            "type": "string",
+                            "enum": ["eq", "ne", "lt", "le", "gt", "ge"],
+                            "description": "Comparison operator.",
+                        },
+                        "value": {
+                            "type": "integer",
+                            "description": "Value to compare the register/memory operand against.",
+                        },
+                    },
+                    "required": ["op", "value"],
+                },
             },
             "required": ["type"],
         },
@@ -204,7 +266,10 @@ def register(server, client, add_tool, feature=None):
             "List all breakpoints. Each entry's 'id' is a stable identifier "
             "(never reused or renumbered) - prefer it for debug_breakpoint_delete. "
             "'index' is only its current position in this list, which shifts "
-            "whenever any breakpoint is added or removed."
+            "whenever any breakpoint is added or removed. 'hit_count' counts "
+            "every genuine match at this breakpoint's location, including "
+            "ones skipped by 'ignore_count' or a false 'condition' - it does "
+            "not mean the emulator actually stopped that many times."
         ),
         read_only=True,
         schema={"type": "object", "properties": {}},

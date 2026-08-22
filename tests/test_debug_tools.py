@@ -5,6 +5,7 @@
 import json
 
 from dosbox_mcp.tools.debug import (
+    _breakpoint_add,
     _breakpoint_delete,
     _run_to,
     _step,
@@ -111,6 +112,23 @@ def test_run_to_posts_segment_and_offset_straight_through():
 
     assert client.last_method == "post"
     assert client.last_path == "/api/v1/debug/run_to"
+    assert client.last_kwargs["json"] == args
+
+
+def test_breakpoint_add_posts_args_straight_through_including_condition_and_ignore_count():
+    client = _FakeClient({"status": "ok", "id": 1})
+    args = {
+        "type": "execute",
+        "segment": 0x1000,
+        "offset": 0x50,
+        "ignore_count": 5,
+        "condition": {"register": "eax", "op": "eq", "value": 0x4C00},
+    }
+
+    _breakpoint_add(client, args)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/debug/breakpoints"
     assert client.last_kwargs["json"] == args
 
 
