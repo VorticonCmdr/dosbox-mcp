@@ -11,16 +11,24 @@ class DosboxError(RuntimeError):
     without parsing the message text - the engine's error_handler
     (webserver.cpp) has emitted {error, error_code, retryable} since
     protocol 1.2; `code` and `retryable` fall back to safe defaults
-    against an older engine that only sends {error}."""
+    against an older engine that only sends {error}.
+
+    `body` is the full parsed JSON body (empty dict if it wasn't JSON or
+    wasn't an object) - most non-2xx responses only need `message`, but
+    a few (memory write's 412 conflict) carry real payload data with no
+    top-level `error` key at all, which `message`'s fallback to the raw
+    response text would otherwise leave stringified and unparsed."""
 
     def __init__(self, status: int, code: str, message: str,
-                retryable: bool = False, route: str | None = None):
+                retryable: bool = False, route: str | None = None,
+                body: dict | None = None):
         super().__init__(f"{status}: {message}")
         self.status = status
         self.code = code
         self.message = message
         self.retryable = retryable
         self.route = route
+        self.body = body if body is not None else {}
 
 
 class DosboxClient:
@@ -50,7 +58,7 @@ class DosboxClient:
             code = body.get("error_code", "unknown")
             retryable = bool(body.get("retryable", False))
             raise DosboxError(resp.status_code, code, message, retryable,
-                              route=f"{method} {path}")
+                              route=f"{method} {path}", body=body)
         ctype = resp.headers.get("content-type", "")
         if ctype.startswith("application/json"):
             return resp.json()
@@ -84,8 +92,8 @@ class DosboxClient:
         return self._handle(self._client.post(self._base + path, **kwargs),
                             "POST", path)
 
-    def put(self, path, json=None, timeout=None):
-        kwargs = {"json": json}
+    def put(self, path, json=None, headers=None, timeout=None):
+        kwargs = {"json": json, "headers": headers}
         if timeout is not None:
             kwargs["timeout"] = timeout
         return self._handle(self._client.put(self._base + path, **kwargs),

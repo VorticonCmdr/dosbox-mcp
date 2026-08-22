@@ -117,7 +117,7 @@ verify the advertised contract against it.
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control |
 | input | `input/sequence`, `input/type` | named-key sequences; paced string typing (feature: input) |
-| memory | `memory/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/search` | guest physical memory (feature: memory) |
+| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search` | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
 | cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
@@ -130,6 +130,21 @@ Semantics that are part of the contract, not just the schemas:
 - Memory routes address guest physical memory with plain integer
   offsets; JSON output (base64 payload) is selected with an
   `Accept: application/json` header, binary is the default.
+- `{segment}` in the memory routes is either a register name
+  (`cs`/`ds`/`es`/`fs`/`gs`/`ss`, case-insensitive) or a numeric
+  paragraph value 0x0000-0xFFFF; `{offset}` is then relative to it. The
+  two resolve at different times: a register name is read live when the
+  request executes, a numeric value is fixed the moment the request is
+  built. `GET /memory/cs/0/16` and `GET /memory/0x1234/0/16` behave
+  differently in exactly that respect even when CS happens to equal
+  0x1234 at request time.
+- `PUT /memory/{...}` accepts an `If-Match` header (base64, unquoted or
+  quoted) as a compare-and-swap precondition: the write only happens if
+  the bytes currently at the address exactly equal it. A match writes
+  and returns 200 as normal; a mismatch returns 412 with
+  `{"memory": {"addr", "data"}}` - `data` is the real current bytes,
+  not an error body, so a client can re-read and retry instead of
+  guessing. Omitting `If-Match` writes unconditionally, as before.
 - The frame returned by `video/frame` is the clean emulator output:
   on-screen overlays the engine draws for the human watching are never
   in it.
@@ -214,6 +229,11 @@ changed and the version it produces.
   `cpu/state` GET (feature: cpu_registers) in the cpu route group. This
   route shipped alongside `cpu/register` PUT in 0.84 but was missing
   from the 1.0 route table.
+- **1.0.2 (draft)** - clarification, no behavior change: documents the
+  `memory/{segment}/{offset}/{length}` GET and `memory/{segment}/{offset}`
+  PUT route forms, and the `If-Match`/412 compare-and-swap precondition
+  on memory writes. Both shipped in 0.84 alongside the plain-offset
+  routes but were missing from the 1.0 route table and semantics list.
 - **1.1.0 (draft)** - fills in the `debugger` feature flag: adds the
   `debug/status`, `debug/pause`, `debug/continue`, `debug/step`, and
   `debug/breakpoints` routes (execute/interrupt/memory breakpoints).
