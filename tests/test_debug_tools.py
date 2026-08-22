@@ -5,11 +5,13 @@
 import json
 
 from dosbox_mcp.tools.debug import (
+    _backtrace,
     _breakpoint_add,
     _breakpoint_delete,
     _disassemble,
     _run_to,
     _step,
+    _step_out,
     _step_over,
     _wait,
 )
@@ -140,6 +142,34 @@ def test_disassemble_builds_the_path_from_segment_offset_and_count():
 
     assert client.last_method == "get"
     assert client.last_path == "/api/v1/debug/disassemble/61440/256/10"
+
+
+def test_step_out_posts_with_no_body():
+    client = _FakeClient({"status": "ok", "resumed_from_stop_id": 3})
+
+    _step_out(client)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/debug/step_out"
+
+
+def test_backtrace_passes_max_frames_as_a_query_param():
+    client = _FakeClient({"frames": [], "stopped_reason": "bp_zero"})
+    args = {"max_frames": 8}
+
+    _backtrace(client, args)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/debug/backtrace"
+    assert client.last_kwargs["params"] == args
+
+
+def test_backtrace_with_no_args_sends_no_query_params():
+    client = _FakeClient({"frames": [], "stopped_reason": "max_frames"})
+
+    _backtrace(client, {})
+
+    assert client.last_kwargs["params"] == {}
 
 
 def test_breakpoint_delete_with_id_sends_only_id():

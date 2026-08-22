@@ -47,7 +47,8 @@ def test_all_tools_registered_regardless_of_features():
     assert "cpu_write_register" in names
     assert "cpu_read_registers" in names
     for t in ("debug_status", "debug_pause", "debug_continue", "debug_step",
-              "debug_breakpoint_add", "debug_breakpoint_list", "debug_breakpoint_delete"):
+              "debug_breakpoint_add", "debug_breakpoint_list", "debug_breakpoint_delete",
+              "debug_backtrace", "debug_step_out"):
         assert t in names
     for t in ("debug_map_set_base", "debug_map_to_live", "debug_map_to_ghidra",
               "debug_map_status"):
@@ -65,12 +66,14 @@ class TestCapabilityModes:
         assert "dosbox_status" in names
         assert "cpu_read_registers" in names
         assert "debug_map_to_live" in names
+        assert "debug_backtrace" in names
         assert "mem_write" not in names
         assert "input_key" not in names
         assert "script_run" not in names
         assert "drive_swap" not in names
         assert "port_write" not in names
         assert "debug_map_set_base" not in names
+        assert "debug_step_out" not in names
 
     def test_interact_adds_input_media_script_but_not_surgery(self):
         names = _build(mode="interact").registered_tool_names()
@@ -82,6 +85,7 @@ class TestCapabilityModes:
         assert "freeze_set" not in names
         assert "port_write" not in names
         assert "cpu_write_register" not in names
+        assert "debug_step_out" not in names
 
     def test_full_registers_everything(self):
         names = _build(mode="full").registered_tool_names()

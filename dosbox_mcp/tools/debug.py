@@ -110,6 +110,27 @@ def register(server, client, add_tool, feature=None):
     )
 
     add_tool(
+        name="debug_step_out",
+        description=(
+            "Run until the current frame returns, by backtracing "
+            "(debug_backtrace) to the caller's return address and planting "
+            "a one-shot breakpoint there - like debug_continue, the actual "
+            "stop happens arbitrarily later (poll debug_wait with the "
+            "returned resumed_from_stop_id). Only proceeds when the "
+            "backtrace resolves the caller's frame with high confidence: "
+            "status is 'no_confident_caller_frame' (not an error) when it "
+            "can't, since the same shaky-frame-pointer heuristics that make "
+            "the walk uncertain would make the planted breakpoint just as "
+            "likely to land somewhere nonsensical. Check debug_backtrace "
+            "first if you want to know why before calling this."
+        ),
+        read_only=False,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _step_out(client),
+        feature=feature,
+    )
+
+    add_tool(
         name="debug_wait",
         description=(
             "Block until the debugger stops again (a breakpoint hit, "
@@ -344,6 +365,43 @@ def register(server, client, add_tool, feature=None):
         feature="disassemble",
     )
 
+    add_tool(
+        name="debug_backtrace",
+        description=(
+            "Walk the call stack via SS:BP, starting at the current CS:EIP. "
+            "Unlike every other debug_* tool (except debug_disassemble), "
+            "this doesn't need the engine's debugger capability - it works "
+            "on any build, paused or running. This is a best-effort "
+            "heuristic, not a guaranteed-accurate unwinder: DOS real-mode "
+            "code is full of hand-written asm, interrupt handlers and leaf "
+            "routines with no BP-based frame at all, so a 1-2 frame result "
+            "is common. Each frame's 'confidence' is 'high' only for frame "
+            "0 (the live position, not a guess) or a frame whose return "
+            "address was independently confirmed by finding the matching "
+            "call instruction right before it; 'low' means the BP chain "
+            "looked structurally sound but nothing confirmed it's a real "
+            "frame - including every frame reached through a far call, "
+            "which this deliberately doesn't try to disambiguate from a "
+            "near one (a wrong guess there would be worse than admitting "
+            "uncertainty). Treat 'low' frames' segment/offset as a guess. "
+            "'stopped_reason' says why the walk ended: 'max_frames' means "
+            "it hit max_frames and might continue further; anything else "
+            "means the chain itself ended or looked invalid there."
+        ),
+        read_only=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "max_frames": {
+                    "type": "integer",
+                    "description": "Frames to walk at most (1-64, default 16).",
+                },
+            },
+        },
+        handler=lambda args: _backtrace(client, args),
+        feature="backtrace",
+    )
+
 
 def _status(client):
     import mcp.types as types
@@ -378,6 +436,12 @@ def _step_over(client):
 def _run_to(client, args):
     import mcp.types as types
     result = client.post("/api/v1/debug/run_to", json=args)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _step_out(client):
+    import mcp.types as types
+    result = client.post("/api/v1/debug/step_out")
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
@@ -422,4 +486,10 @@ def _disassemble(client, args):
     path = (f"/api/v1/debug/disassemble/{args['segment']}/"
             f"{args['offset']}/{args['count']}")
     result = client.get(path)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _backtrace(client, args):
+    import mcp.types as types
+    result = client.get("/api/v1/debug/backtrace", params=args)
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
