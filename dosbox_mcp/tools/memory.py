@@ -410,6 +410,55 @@ def register_search(server, client, add_tool, feature=None):
     )
 
     add_tool(
+        name="mem_scan",
+        description=(
+            "Scan a range of guest memory for a masked byte signature, "
+            "e.g. Ghidra's copyable byte string '8B 46 ?? 50 E8' - space-"
+            "separated hex-pair bytes and '??' wildcards, 1-256 tokens, "
+            "at least one fixed byte. The engine rejects a pattern that "
+            "isn't specific enough for the requested range (too many "
+            "wildcards would make the scan match almost everywhere) and "
+            "one that's too specific for a large range (would risk "
+            "exceeding the scan time budget) - narrow the range or "
+            "adjust the fixed-byte count if it does. Returns 'matches' "
+            "(up to 'limit' physical addresses), 'total' (the real match "
+            "count, which can exceed what's returned) and 'truncated' "
+            "(whether it did). If an execute breakpoint is active inside "
+            "the range, the scan reads through its 0xCC trap byte to the "
+            "real instruction underneath - a plain mem_read over the "
+            "same address would see the trap."
+        ),
+        read_only=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": (
+                        "Space-separated hex-pair bytes and '??' "
+                        "wildcards, e.g. '8B 46 ?? 50 E8'."
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "description": "Start of scan range (physical address).",
+                },
+                "end": {
+                    "type": "integer",
+                    "description": "End of scan range (exclusive).",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max matches to return (1-4096, default 256).",
+                },
+            },
+            "required": ["pattern", "start", "end"],
+        },
+        handler=lambda args: _mem_scan(client, args),
+        feature=feature,
+    )
+
+    add_tool(
         name="dos_memory_map",
         description=(
             "Walk the DOS MCB chain and report which PSP owns which memory "
@@ -433,6 +482,19 @@ def _mem_search(client, args):
     if "limit" in args:
         body["limit"] = args["limit"]
     result = client.post("/api/v1/memory/search", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _mem_scan(client, args):
+    import mcp.types as types
+    body = {
+        "pattern": args["pattern"],
+        "start": args["start"],
+        "end": args["end"],
+    }
+    if "limit" in args:
+        body["limit"] = args["limit"]
+    result = client.post("/api/v1/memory/scan", json=body)
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 

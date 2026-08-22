@@ -117,7 +117,7 @@ verify the advertised contract against it.
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control |
 | input | `input/sequence`, `input/type` | named-key sequences; paced string typing (feature: input) |
-| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search` | guest physical memory (feature: memory) |
+| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan` | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
 | cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
@@ -152,6 +152,19 @@ Semantics that are part of the contract, not just the schemas:
   `total > matches.length`. A caller that only reads `matches` still
   gets a valid, if possibly incomplete, result - check `truncated`
   rather than assume completeness.
+- `POST /memory/scan` finds a masked byte signature (e.g. Ghidra's
+  copyable byte string `8B 46 ?? 50 E8`): space-separated hex-pair
+  bytes and `??` wildcards in the `pattern` field, 1-256 tokens, at
+  least one fixed byte. Same span cap (16 MB) and `matches`/`total`/
+  `truncated`/`limit` contract as `memory/search`. The engine rejects
+  (400) a pattern that isn't selective enough for the requested span -
+  too many wildcards relative to the span would make it match almost
+  everywhere - and separately rejects one whose fixed-byte count is too
+  high for the span, since verifying that many candidate matches could
+  risk the request's time budget. If an execute breakpoint is active
+  inside the scanned range, the scan reads through its patched trap
+  byte to the real instruction underneath; a plain memory read over the
+  same address sees the trap, not the original byte.
 - The frame returned by `video/frame` is the clean emulator output:
   on-screen overlays the engine draws for the human watching are never
   in it.
@@ -255,3 +268,8 @@ changed and the version it produces.
   range; a caller that only reads `matches` and doesn't pass `limit`
   now gets at most 256 by default. `total`/`truncated` exist precisely
   so that change is detectable rather than a silent truncation.
+- **1.3.0 (draft)** - adds `POST /memory/scan` under the existing
+  `memory` feature flag: masked byte-signature search (hex-pair bytes
+  and `??` wildcards), the mechanism a client uses to locate a Ghidra
+  function's live address from its byte pattern. Same `matches`/
+  `total`/`truncated`/`limit` contract as `memory/search`.

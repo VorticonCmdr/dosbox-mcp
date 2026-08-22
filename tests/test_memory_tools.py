@@ -13,6 +13,7 @@ from dosbox_mcp.tools.memory import (
     MAX_RENDERED_VIEW_BYTES,
     _mem_path,
     _mem_read,
+    _mem_scan,
     _mem_search,
     _mem_write,
     _render_hex,
@@ -416,6 +417,44 @@ def test_mem_search_returns_total_and_truncated():
     response = {"matches": [0, 4], "total": 500, "truncated": True}
     client = _FakeClient(response)
     result = _mem_search(client, {"start": 0, "end": 1000, "value": 1})
+    body = json.loads(result[0].text)
+    assert body["total"] == 500
+    assert body["truncated"] is True
+
+
+# ---------------------------------------------------------------------------
+# mem_scan
+# ---------------------------------------------------------------------------
+
+
+def test_mem_scan_posts_pattern_and_range():
+    client = _FakeClient({"matches": [], "total": 0, "truncated": False})
+    _mem_scan(client, {"pattern": "8B 46 ?? 50 E8", "start": 0, "end": 1000})
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/memory/scan"
+    assert client.last_kwargs["json"] == {
+        "pattern": "8B 46 ?? 50 E8",
+        "start": 0,
+        "end": 1000,
+    }
+
+
+def test_mem_scan_omits_limit_when_not_given():
+    client = _FakeClient({"matches": [], "total": 0, "truncated": False})
+    _mem_scan(client, {"pattern": "8B", "start": 0, "end": 16})
+    assert "limit" not in client.last_kwargs["json"]
+
+
+def test_mem_scan_passes_limit_through():
+    client = _FakeClient({"matches": [0], "total": 1, "truncated": False})
+    _mem_scan(client, {"pattern": "8B", "start": 0, "end": 16, "limit": 10})
+    assert client.last_kwargs["json"]["limit"] == 10
+
+
+def test_mem_scan_returns_total_and_truncated():
+    response = {"matches": [0, 4], "total": 500, "truncated": True}
+    client = _FakeClient(response)
+    result = _mem_scan(client, {"pattern": "90", "start": 0, "end": 1000})
     body = json.loads(result[0].text)
     assert body["total"] == 500
     assert body["truncated"] is True
