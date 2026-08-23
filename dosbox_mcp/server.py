@@ -107,6 +107,7 @@ def build_server(conn, mode: str = "full", manager=None):
                        (media, "media"), (script, "script"),
                        (wait, "wait")):
         mod.register(server, conn, add_tool_for(group))
+    media.register_drive(server, conn, add_tool_for("media"), feature="drive")
 
     input_tools.register(server, conn, add_tool_for("input"), feature="input")
     # debug_map_set_base/to_live/to_ghidra/status are pure client-side

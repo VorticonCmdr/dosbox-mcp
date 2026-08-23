@@ -119,12 +119,31 @@ A typical session, in the agent's words:
 3. `input_key` / `input_sequence` - press keys; `input_type` types a
    whole string at a safe pace.
 4. `screen_capture` - grab a frame when the screen is graphical.
-5. `script_run` - for anything fiddly, run a small sandboxed Lua
+5. `drive_swap` - when an installer prompts for the next disk, swap it
+   in without leaving the loop above.
+6. `script_run` - for anything fiddly, run a small sandboxed Lua
    script in the engine. This is the escape hatch: whatever no
    dedicated tool covers, a script can usually do.
 
 Reading and typing in a loop is most of it. Watch the screen, decide,
 press a key, watch again.
+
+## Multi-disk installs
+
+`drive_swap` mounts or swaps a floppy or hard disk image onto a drive
+letter - call it the moment an installer asks for the next disk, then
+keep typing/reading as normal. `drive_list` shows what's currently
+mounted on every letter (and which are free); `mount_images` lists
+what's actually available to mount, under whatever directories an
+operator configured; `mount_status` shows those directories plus
+whether mounting is locked. If `drive_swap` refuses with
+`outside_whitelist`, the image isn't under one of `mount_status`'s
+`allowed_image_roots` - that whitelist is operator-configured and
+cannot be bypassed from here.
+
+Once every disk an install needs is mounted, `mount_lock` freezes the
+configuration - no further mount attempt succeeds, agent-initiated or
+otherwise, for the rest of the session. There is no unlock.
 
 ## Reverse engineering with Ghidra (feature: debugger)
 
@@ -187,6 +206,97 @@ worlds and tell the bridge the correspondence:
 Breakpoint `index` values (`debug_breakpoint_list`) are positions, not
 stable IDs - re-list before deleting by index if you've added or
 removed others in between.
+
+## Logging a memory-triggered event, with a screenshot
+
+"Stop me when something happens at this address, log it, grab a
+screenshot, then keep going" splits into two genuinely different
+techniques depending on what "something happening" means. Picking the
+wrong one either wastes a lot of round trips or gives you a screenshot
+that's a second late.
+
+**A. You know what code touches the location (exact, CPU truly halts).**
+If the event is "this routine runs" - a specific instruction, an INT
+21h call, code reaching a physical address - use a real breakpoint:
+`debug_breakpoint_add` (`execute`, `interrupt`, or `memory` type),
+`debug_continue`, poll `debug_status` until `debugging: true`. The CPU
+is now actually stopped, so there is no rush and no drift: `mem_read`/
+`cpu_read_registers` to log state, `screen_capture` for a pixel-perfect
+screenshot of that exact instant (or `screen_text` if it's a text-mode
+moment), then `debug_breakpoint_add`/`debug_continue` again. This is
+the same mechanism the Ghidra workflow above uses.
+
+One easy misread: the `memory` breakpoint type is not a data
+watchpoint. Per its own contract it stops when *execution reaches*
+that segment:offset - the same effect as `execute`, just classified
+differently by the engine. It will not fire because a byte's value
+changed unless an instruction is physically executing there (relevant
+for self-modifying code, not for "notify me when this variable
+changes").
+
+**B. You don't know which instruction touches it - you just want to
+watch a value (approximate timing, runs entirely in-engine).** There
+is no data watchpoint in this toolchain today: neither the debug
+routes nor dbxdebug's GDB client implement a break-on-write/read trap
+(GDB RSP has packet types for that; nothing here sends them yet). The
+practical substitute is a Lua script that polls the address itself,
+frame by frame, on the emulation thread - far cheaper than the agent
+polling `mem_read` over HTTP every frame:
+
+```lua
+-- Watches one byte and records every change it sees.
+-- segment:offset here is BIOS keyboard shift-flags (0040:0017) - swap
+-- in whatever address you're actually watching.
+local seg, off = 0x0040, 0x0017
+local last = dosbox.mem_read_byte(seg, off)
+dosbox.output.hits = {}
+
+while true do
+    local v = dosbox.mem_read_byte(seg, off)
+    if v ~= last then
+        table.insert(dosbox.output.hits, {
+            frame = dosbox.frame(), from = last, to = v,
+        })
+        dosbox.log(string.format(
+            "0040:0017 changed at frame %d: %d -> %d",
+            dosbox.frame(), last, v))
+        last = v
+    end
+    dosbox.wait_frames(1)  -- give the frame back; see caveats below
+end
+```
+
+Run it with `script_run`, then poll `script_status` periodically -
+`output.hits` is readable live while the script is still `running`,
+not just after it finishes. When you see a new entry, call
+`screen_capture` right away to grab a frame near that moment, and
+`script_stop` when you're done watching.
+
+Three things about this approach that aren't obvious from the API:
+
+- **Addresses are `(segment, offset)` pairs, not the `segment:offset`
+  strings or linear addresses other tools accept.**
+  `dosbox.mem_read(seg, off, len)`, `mem_read_byte`, `mem_read_word`,
+  and `mem_write` all take two integers, always in that order.
+- **The loop must yield every iteration.** `dosbox.wait_frames(n)` is
+  what hands control back to the engine so the next frame can run; a
+  `while true do ... end` without it never returns, and nothing else
+  in this API implicitly yields for you. `wait_frames(1)` polls every
+  frame (tightest detection, shortest budget below);
+  `wait_frames(30)` polls twice a second and stretches the budget
+  ~30x at the cost of coarser timing.
+- **There's a lifetime instruction budget (default 1,000,000 Lua VM
+  instructions), not a per-frame one.** A tight `wait_frames(1)` loop
+  burns through it in something like half an hour to an hour of
+  real playtime, then the script stops with `"instruction limit
+  exceeded"` in `script_status`'s `error` field - `output.hits`
+  collected up to that point is still there, it just won't grow
+  further until you `script_run` again.
+- **Timing isn't exact.** The script can yield its own coroutine but
+  it can't halt guest CPU execution the way a real breakpoint does -
+  the game keeps running between the frame that changed and whenever
+  you get around to calling `screen_capture`. If you need the frame
+  the change happened on, not "shortly after," you need approach A.
 
 ## A note the agent should take to heart
 

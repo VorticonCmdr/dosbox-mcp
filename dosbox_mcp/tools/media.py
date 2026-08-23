@@ -47,3 +47,143 @@ def _capture_status(client):
     import mcp.types as types
     result = client.get("/api/v1/capture/video/status")
     return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def register_drive(server, client, add_tool, feature=None):
+    add_tool(
+        name="drive_list",
+        description=(
+            "List drive letters A-Z and what's mounted on each: type "
+            "(local/cdrom/fat/iso/virtual), the mounted host path, "
+            "read-only, and removable. Unmounted letters get just "
+            "{letter, mounted:false} - use this to find a free letter "
+            "before drive_swap, or to confirm what a multi-disk "
+            "installer is currently reading from."
+        ),
+        read_only=True,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _drive_list(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mount_status",
+        description=(
+            "Whether mounting is locked (mount_lock) and the "
+            "directory/image roots an API-origin mount must be under. "
+            "An empty allowed_image_roots means every drive_swap call "
+            "is refused by policy regardless of path - the "
+            "out-of-the-box state until an operator configures "
+            "mount_allowed_image_roots in the primary config. Check "
+            "this first if drive_swap keeps returning "
+            "outside_whitelist."
+        ),
+        read_only=True,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _mount_status(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mount_images",
+        description=(
+            "List image files under the configured image roots "
+            "(mount_status's allowed_image_roots), grouped by root - "
+            "so an agent can discover what's mountable without shell "
+            "access. Each entry's path is independently re-validated "
+            "against the same policy drive_swap enforces, so a path "
+            "returned here will not then be refused by mount policy "
+            "(it can still fail structural validation as a disk "
+            "image - drive_swap's own not_a_disk_image error). "
+            "Non-recursive per root; 'truncated' on a root means it "
+            "held more files than the engine's per-root cap."
+        ),
+        read_only=True,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _mount_images(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="drive_swap",
+        description=(
+            "Mount or swap a floppy or hard disk image on a drive "
+            "letter. For multi-disk installs, call this when the "
+            "installer prompts for the next disk. The image path must "
+            "resolve under one of mount_status's allowed_image_roots - "
+            "an operator-configured whitelist, not something this "
+            "call can bypass - and mounting must not be locked "
+            "(mount_lock). On refusal, error_code is one of "
+            "missing_field, invalid_drive_letter, mount_locked, "
+            "file_not_found, mount_failed, or a mount-policy reason "
+            "(does_not_resolve, not_regular_file, symlink_component, "
+            "system_path, outside_whitelist, not_a_disk_image). This "
+            "constructs real disk I/O with the emulator blocked under "
+            "a 5-second deadline, and does not check that the target "
+            "drive letter is currently mounted before replacing it."
+        ),
+        read_only=False,
+        schema={
+            "type": "object",
+            "properties": {
+                "drive": {
+                    "type": "string",
+                    "description": "Drive letter, e.g. 'A'.",
+                },
+                "image": {
+                    "type": "string",
+                    "description": "Path to the disk image - see mount_images for what's available.",
+                },
+            },
+            "required": ["drive", "image"],
+        },
+        handler=lambda args: _drive_swap(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mount_lock",
+        description=(
+            "Freeze the mount configuration: after this, every "
+            "further mount attempt is refused - drive_swap, the "
+            "guest's own MOUNT/IMGMOUNT/BOOT commands, all of it. "
+            "Cannot be undone for the life of the process. Call this "
+            "once an install's disk images are all mounted and you "
+            "want to guarantee nothing changes the drive layout again."
+        ),
+        read_only=False,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _mount_lock(client),
+        feature=feature,
+    )
+
+
+def _drive_list(client):
+    import mcp.types as types
+    result = client.get("/api/v1/drive")
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _mount_status(client):
+    import mcp.types as types
+    result = client.get("/api/v1/mount/policy")
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _mount_images(client):
+    import mcp.types as types
+    result = client.get("/api/v1/mount/images")
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _drive_swap(client, args):
+    import mcp.types as types
+    body = {"drive": args["drive"], "image": args["image"]}
+    result = client.post("/api/v1/drive/swap", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _mount_lock(client):
+    import mcp.types as types
+    result = client.post("/api/v1/mount/lock")
+    return [types.TextContent(type="text", text=json.dumps(result))]

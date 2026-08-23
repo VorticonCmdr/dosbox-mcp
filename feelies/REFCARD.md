@@ -131,8 +131,22 @@ address - anchoring absorbs that automatically.
   `{}`
 - **script_stop** - stop the running script. `{}`
 
+For watching a memory address frame-by-frame and logging every change
+via `dosbox.mem_read_byte`/`dosbox.wait_frames`/`dosbox.output`, see
+"Logging a memory-triggered event, with a screenshot" in MANUAL.md.
+
 ## Media and recording
 
 - **video_capture_start** - start recording. `{}`
 - **video_capture_stop** - stop recording. `{}`
 - **video_capture_status** (read-only) - recording state. `{}`
+- **drive_list** (read-only) - every drive letter A-Z and what's
+  mounted on each. `{}`
+- **mount_status** (read-only) - whether mounting is locked, and the
+  configured directory/image roots. `{}`
+- **mount_images** (read-only) - image files under the configured
+  image roots, grouped by root. `{}`
+- **drive_swap** - mount or swap a disk image onto a drive letter, for
+  multi-disk installs. `{"drive": "A", "image": "/path/to/disk2.img"}`
+- **mount_lock** - freeze the mount configuration; one-way for the
+  life of the process. `{}`

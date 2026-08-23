@@ -123,7 +123,7 @@ verify the advertised contract against it.
 | cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
 | io | `io/port` GET/PUT | port I/O (feature: port_io) |
 | script | `script/load`, `script/start`, `script/status`, `script/stop` | sandboxed Lua; `script/load` takes the raw source as a text/plain body |
-| media | `drive/swap`, mount routes | disk image swapping; mount policy applies underneath |
+| media | `drive` GET, `drive/swap` POST, `mount/lock` GET/POST, `mount/policy` GET, `mount/images` GET | disk drive listing and image swapping; mount policy applies underneath (feature: drive) |
 
 Semantics that are part of the contract, not just the schemas:
 
@@ -240,6 +240,33 @@ Semantics that are part of the contract, not just the schemas:
   to the identical truncation risk, surfaced as `memoryMapTruncated`
   (added alongside the allocation routes above, since both read the
   same underlying chain-walk primitive).
+- `GET /drive` always returns exactly 26 entries (A through Z, in
+  order); an unmounted letter is just `{letter, mounted:false}`, the
+  type/info/read_only/removable fields exist only when mounted.
+  `info` on a local/FAT/ISO/CD-ROM drive is the mounted host
+  filesystem path - a deliberate disclosure (this whole API sits
+  behind the bearer token on loopback), not an oversight.
+- `GET /mount/policy`'s `allowed_bases`/`allowed_image_roots` are
+  already-canonicalized host paths, read once at engine startup from
+  the primary config's `[webserver]` section and never mutated after
+  - a client does not need to poll this for changes mid-session. An
+  empty `allowed_image_roots` means every API-origin `drive/swap`
+  fails by policy regardless of path; this is the out-of-the-box
+  state until an operator configures `mount_allowed_image_roots`.
+- `GET /mount/images` walks each configured image root
+  non-recursively (subdirectories and their contents are never
+  listed) and independently re-validates every entry against the same
+  primitives `drive/swap` uses at mount time - a path this route
+  returns will not then be refused by mount policy, though it can
+  still fail `drive/swap`'s structural disk-image check
+  (`not_a_disk_image`). Each root has its own file-count cap
+  (`dosbox/info`'s `capabilities.drive.limits.max_images_per_root`);
+  `truncated` on a root is true only when that root genuinely held
+  more matching files than the cap, never as a false positive when a
+  root holds exactly the cap's worth.
+- `POST /mount/lock` is a one-way latch for the life of the process:
+  once locked, every further mount attempt is refused, `drive/swap`
+  and the guest's own MOUNT/IMGMOUNT/BOOT alike. There is no unlock.
 - Validation lives engine-side. The engine is the trust boundary;
   a client talking HTTP directly must be subject to exactly the same
   limits as one going through a bridge.
@@ -393,3 +420,28 @@ changed and the version it produces.
   silently corrupting that program's memory. `dos/internals` gains an
   additive `memoryMapTruncated` field, for the same MCB-chain-walk
   truncation risk `memory/allocations` is also subject to.
+- **1.7.0 (draft)** - adds `GET /drive` (full drive listing: mounted
+  state, type, host info, read-only, removable), `GET /mount/policy`
+  (locked state plus the configured `allowed_bases`/
+  `allowed_image_roots`), and `GET /mount/images` (a per-root, non-
+  recursive listing of files under the image roots, each independently
+  re-validated against mount policy) under a new `drive` feature flag,
+  which also now gates the previously-ungated `drive/swap` and
+  `mount/lock`. Also a genuine behavior change to `drive/swap`, not
+  just new routes: its error responses previously collapsed every
+  failure into a bare 400 `{"error"}` with no `error_code`; they now
+  carry the same `{"error", "error_code", "retryable"}` shape every
+  other structured error response in this spec uses (see `memory/free`
+  above), with distinct codes -
+  `missing_field`, `invalid_drive_letter`, `mount_locked`,
+  `file_not_found`, `mount_failed`, or a mount-policy reason
+  (`does_not_resolve`, `not_regular_file`, `symlink_component`,
+  `system_path`, `outside_whitelist`, `not_a_disk_image`) - and split
+  across the status codes that actually distinguish them: `mount_locked`
+  moved from a 400-shaped collapse into a clean 403 (previously 403 was
+  documented as covering both "locked" and "policy violation"; policy
+  violations are 400 now), and `file_not_found`/`mount_failed` are new
+  404/500 cases that previously also fell into the generic 400. A
+  client that only checked `response.ok` is unaffected; one that
+  branched on the exact status code for `drive/swap` needs to widen
+  its 400 handling to include 403/404/500.
