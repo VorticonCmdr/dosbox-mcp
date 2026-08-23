@@ -8,10 +8,35 @@ import json
 def register(server, client, add_tool, feature=None):
     add_tool(
         name="video_capture_start",
-        description="Start ZMBV video recording of the emulator screen.",
+        description=(
+            "Start ZMBV video recording of the emulator screen. "
+            "'mode' selects what feeds the encoder: 'raw' (default) is "
+            "the emulator framebuffer at native resolution; 'rendered' "
+            "is the post-shader output at window resolution as shown "
+            "on screen. 'compression' (0-9, store-only to maximum) is "
+            "set for that mode and the recording started atomically in "
+            "this one call - it is refused with a 409 if a capture is "
+            "already running, since the zlib level is latched at start "
+            "and a mid-recording change would silently not apply."
+        ),
         read_only=False,
-        schema={"type": "object", "properties": {}},
-        handler=lambda args: _capture_start(client),
+        schema={
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string",
+                    "enum": ["raw", "rendered"],
+                    "description": "What feeds the encoder (default 'raw').",
+                },
+                "compression": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9,
+                    "description": "Zlib level for `mode`, applied before starting.",
+                },
+            },
+        },
+        handler=lambda args: _capture_start(client, args),
     )
 
     add_tool(
@@ -24,16 +49,34 @@ def register(server, client, add_tool, feature=None):
 
     add_tool(
         name="video_capture_status",
-        description="Check whether a video capture is in progress.",
+        description=(
+            "Video capture state: whether it's recording, the mode, "
+            "the host filesystem path, frames written, elapsed_ms "
+            "(measured from when the file was actually created, not "
+            "from the start call), bytes_written, the configured "
+            "compression_level, and why the last recording ended. "
+            "path/frames/elapsed_ms/bytes_written keep reporting the "
+            "last recording's final values after it stops - checking "
+            "right after stopping is the normal sequence. frames "
+            "staying at 0 while capturing is true is the tell that "
+            "nothing was actually written (e.g. the emulator was "
+            "paused the whole time)."
+        ),
         read_only=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _capture_status(client),
     )
 
 
-def _capture_start(client):
+def _capture_start(client, args):
     import mcp.types as types
-    result = client.post("/api/v1/capture/video/start")
+    body = {}
+    if "mode" in args:
+        body["mode"] = args["mode"]
+    if "compression" in args:
+        body["compression"] = args["compression"]
+    result = client.post("/api/v1/capture/video/start", json=body) if body \
+        else client.post("/api/v1/capture/video/start")
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 

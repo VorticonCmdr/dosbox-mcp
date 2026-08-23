@@ -5,6 +5,7 @@
 import json
 
 from dosbox_mcp.tools.media import (
+    _capture_start,
     _drive_list,
     _drive_swap,
     _mount_images,
@@ -86,3 +87,31 @@ def test_mount_lock_posts_with_no_body():
     assert client.last_path == "/api/v1/mount/lock"
     assert "json" not in client.last_kwargs
     assert json.loads(result[0].text) == {"status": "locked"}
+
+
+def test_capture_start_with_no_args_posts_with_no_body():
+    client = _FakeClient({"status": "recording", "mode": "raw"})
+
+    result = _capture_start(client, {})
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/capture/video/start"
+    assert "json" not in client.last_kwargs
+    assert json.loads(result[0].text) == {"status": "recording", "mode": "raw"}
+
+
+def test_capture_start_forwards_mode_and_compression():
+    client = _FakeClient({"status": "recording", "mode": "rendered",
+                          "compression": 3})
+
+    _capture_start(client, {"mode": "rendered", "compression": 3})
+
+    assert client.last_kwargs["json"] == {"mode": "rendered", "compression": 3}
+
+
+def test_capture_start_forwards_only_the_args_given():
+    client = _FakeClient({"status": "recording", "mode": "raw"})
+
+    _capture_start(client, {"compression": 5})
+
+    assert client.last_kwargs["json"] == {"compression": 5}

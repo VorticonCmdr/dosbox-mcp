@@ -115,7 +115,7 @@ verify the advertised contract against it.
 |---|---|---|
 | session | `status`, `program/state`, `dosbox/info`, `dosbox/shutdown` | machine and program state; shutdown is irreversible |
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
-| capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control |
+| capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control; status reports path, frames, elapsed time and bytes written |
 | input | `input/sequence`, `input/type` | named-key sequences; paced string typing (feature: input) |
 | memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff`, `memory/allocate` POST, `memory/free` POST, `memory/allocations` GET | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
@@ -198,6 +198,24 @@ Semantics that are part of the contract, not just the schemas:
 - The frame returned by `video/frame` is the clean emulator output:
   on-screen overlays the engine draws for the human watching are never
   in it.
+- `POST /capture/video/start` folds `mode` and `compression` into one
+  call: the level is set for `mode` and the recording started
+  atomically, so a client never races a separate PUT against this POST.
+  Refused with 409 if `compression` is given while a capture is already
+  running - the zlib level is latched at start, so a mid-recording
+  change would silently not apply.
+- `GET /capture/video/status`'s `path`/`frames`/`elapsed_ms`/
+  `bytes_written` describe the current (or, after a stop, the most
+  recently finished) recording, and keep reporting its final values
+  after it stops - checking status right after stopping is the normal
+  sequence. All are absent/zero if no video capture has run yet this
+  session. `elapsed_ms` is measured from when the file was actually
+  created, not from the `start` call (the state is `Pending` and no
+  file exists until the first frame arrives), and is frozen at the
+  recording's real duration once it stops rather than climbing with
+  wall-clock time. `frames` staying at 0 while `capturing` is `true` is
+  the clearest sign a capture never actually wrote anything - e.g. the
+  emulator sat paused or minimized the whole time.
 - `POST /memory/allocate {size, area, strategy}` allocates through the
   DOS/XMS allocator and returns `{addr}`. `size` is 1-65535 bytes;
   `area` is `CONV` (conventional, default), `UMA` (upper memory), or
@@ -445,3 +463,12 @@ changed and the version it produces.
   client that only checked `response.ok` is unaffected; one that
   branched on the exact status code for `drive/swap` needs to widen
   its 400 handling to include 403/404/500.
+- **1.8.0 (draft)** - `POST /capture/video/start` gains an optional
+  `compression` field (request), set for `mode` and the recording
+  started atomically in the same call; refused with a new 409 if
+  `compression` is given while a capture is already running. `GET
+  /capture/video/status` gains `path`, `frames`, `elapsed_ms`,
+  `bytes_written`, and `compression_level` (response) - `path`/`frames`
+  in particular close a real gap: an agent could tell a recording was
+  active but not where it landed on disk or whether it actually wrote
+  any frames. All under the existing `capture` feature flag.

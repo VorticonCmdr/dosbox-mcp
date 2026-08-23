@@ -137,9 +137,14 @@ via `dosbox.mem_read_byte`/`dosbox.wait_frames`/`dosbox.output`, see
 
 ## Media and recording
 
-- **video_capture_start** - start recording. `{}`
+- **video_capture_start** - start recording. `{mode?: raw|rendered,
+  compression?: 0-9}` - both optional; compression is set for `mode`
+  and recording started atomically, refused with 409 if a capture is
+  already running.
 - **video_capture_stop** - stop recording. `{}`
-- **video_capture_status** (read-only) - recording state. `{}`
+- **video_capture_status** (read-only) - capturing, mode, path, frames,
+  elapsed_ms, bytes_written, compression_level, last_stop_reason.
+  `{}`
 - **drive_list** (read-only) - every drive letter A-Z and what's
   mounted on each. `{}`
 - **mount_status** (read-only) - whether mounting is locked, and the
