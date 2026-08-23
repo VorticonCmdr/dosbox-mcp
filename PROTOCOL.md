@@ -117,7 +117,7 @@ verify the advertised contract against it.
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control |
 | input | `input/sequence`, `input/type` | named-key sequences; paced string typing (feature: input) |
-| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff` | guest physical memory (feature: memory) |
+| memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff`, `memory/allocate` POST, `memory/free` POST, `memory/allocations` GET | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
 | cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
@@ -198,6 +198,48 @@ Semantics that are part of the contract, not just the schemas:
 - The frame returned by `video/frame` is the clean emulator output:
   on-screen overlays the engine draws for the human watching are never
   in it.
+- `POST /memory/allocate {size, area, strategy}` allocates through the
+  DOS/XMS allocator and returns `{addr}`. `size` is 1-65535 bytes;
+  `area` is `CONV` (conventional, default), `UMA` (upper memory), or
+  `XMS` (page allocator, `strategy` must be `BEST_FIT`); `strategy` is
+  `BEST_FIT` (default), `FIRST_FIT`, or `LAST_FIT`. Every address this
+  route returns must be freed through `POST /memory/free {addr}`, not
+  assumed reclaimed automatically. Failure to allocate is a 503 with
+  `error_code` `registry_full` (the engine's own allocation-tracking
+  registry is already at its cap - free something first) or
+  `insufficient_memory` (no block large enough) - not the client's
+  request being malformed, so distinct from 400.
+  `POST /memory/free {addr}` is a 400 with `error_code` `not_allocated`
+  for an address this route never returned or one already freed, or
+  `owner_changed` for a CONV/UMA address whose DOS-side owner no longer
+  matches who it was allocated under: a program's memory is reclaimed
+  by the engine when *that program* exits, invisibly to this API, and
+  DOS can then hand the same segment to a different, currently-running
+  program - freeing it at that point would silently corrupt that
+  program's memory rather than fail cleanly, so the engine detects the
+  ownership change and refuses instead. A block should be freed before
+  the program active when it was allocated exits; this route is not a
+  bridge-managed heap independent of DOS process lifetime. All four
+  `error_code` values are `retryable: false` - none of these clear on
+  their own, the caller has to act (free something, or accept the
+  block is gone) before a retry can succeed.
+- `GET /memory/allocations` lists every block `memory/allocate` has
+  handed out and not yet freed (`{addr, size, area}`, `size` being the
+  actually-reserved paragraph/page-rounded byte count, not necessarily
+  the exact size requested), plus free-memory totals:
+  `conventionalFreeBytes`, `conventionalLargestBlockBytes` (the figure
+  that actually bounds the next allocation - a request can fail even
+  when `conventionalFreeBytes` looks big enough, if free space is
+  fragmented across several smaller blocks), `umbFreeBytes`, and
+  `xmsFreeBytes`. `conventionalTruncated`/`umbTruncated` are true if the
+  underlying MCB chain walk was cut short (a corrupt chain, or a
+  1000-block hard cap) - the free-byte totals may then be an undercount,
+  not the true picture. Not part of `dos/internals`, which exists only
+  to hand out pointers.
+- `dos/internals`' `memoryMap` walks the same MCB chain and is subject
+  to the identical truncation risk, surfaced as `memoryMapTruncated`
+  (added alongside the allocation routes above, since both read the
+  same underlying chain-walk primitive).
 - Validation lives engine-side. The engine is the trust boundary;
   a client talking HTTP directly must be subject to exactly the same
   limits as one going through a bridge.
@@ -332,3 +374,22 @@ changed and the version it produces.
   (0..0xFFFFFFFF) combination was accepted and handed straight to the
   engine, where the address computation can silently wrap into a small,
   in-range-looking location instead of the one actually requested.
+- **1.6.0 (draft)** - documents `POST /memory/allocate` and
+  `POST /memory/free` for the first time (shipped in an earlier engine
+  version but never added to this spec) and adds
+  `GET /memory/allocations` under the existing `memory` feature flag: a
+  listing of live allocations plus free-memory totals (conventional,
+  UMB, XMS). Not purely a documentation catch-up: `memory/allocate`'s
+  503 and `memory/free`'s 400 previously carried no response body at
+  all; both now send the full `{"error", "error_code", "retryable"}`
+  shape every other error response in this spec already carries, with
+  four distinct `error_code` values across the two routes
+  (`registry_full`/`insufficient_memory`, `not_allocated`/
+  `owner_changed`). `owner_changed` is itself a new refusal, not just a
+  new code for an old one: `memory/free` now detects when a CONV/UMA
+  address's DOS-side owner has changed since it was allocated (the
+  program that owned it exited, and DOS handed the same memory to a
+  different, currently-running program) and refuses rather than
+  silently corrupting that program's memory. `dos/internals` gains an
+  additive `memoryMapTruncated` field, for the same MCB-chain-walk
+  truncation risk `memory/allocations` is also subject to.

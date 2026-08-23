@@ -106,6 +106,7 @@ def build_server(conn, mode: str = "full", manager=None):
 
     input_tools.register(server, conn, add_tool_for("input"), feature="input")
     memory.register(server, conn, add_tool_for("memory"), feature="memory")
+    memory.register_allocation(server, conn, add_tool_for("memory"), feature="memory")
     memory.register_search(server, conn, add_tool_for("memory"), feature="memory")
     memory.register_snapshot(server, conn, add_tool_for("memory"), feature="memory")
     freeze.register(server, conn, add_tool_for("freeze"), feature="freeze")

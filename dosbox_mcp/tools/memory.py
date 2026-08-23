@@ -567,6 +567,129 @@ def register_snapshot(server, client, add_tool, feature=None):
     )
 
 
+def register_allocation(server, client, add_tool, feature=None):
+    add_tool(
+        name="mem_alloc",
+        description=(
+            "Allocate a block of guest memory through the DOS/XMS "
+            "allocator and return its physical address. 'area' is "
+            "'CONV' (conventional, default), 'UMA' (upper memory), or "
+            "'XMS' (extended, via the page allocator - only supports "
+            "'BEST_FIT'). Refuses (503) rather than guessing when no "
+            "free block is large enough, or when this API's own "
+            "allocation registry is already full - free some "
+            "allocations first (see mem_allocations). Pair with "
+            "mem_free: an address this returns must be freed through "
+            "mem_free, not assumed reclaimed automatically. Free it "
+            "before the DOS program that's active right now exits - "
+            "DOS reclaims a program's memory when it exits and can "
+            "hand it to something else, and mem_free refuses rather "
+            "than freeing a block whose owner has since changed."
+        ),
+        read_only=False,
+        schema={
+            "type": "object",
+            "properties": {
+                "size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535,
+                    "description": "Bytes to allocate (1-65535).",
+                },
+                "area": {
+                    "type": "string",
+                    "enum": ["CONV", "UMA", "XMS"],
+                    "description": "Defaults to CONV.",
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": ["BEST_FIT", "FIRST_FIT", "LAST_FIT"],
+                    "description": "Defaults to BEST_FIT. XMS only supports BEST_FIT.",
+                },
+            },
+            "required": ["size"],
+        },
+        handler=lambda args: _mem_alloc(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mem_free",
+        description=(
+            "Free a block previously returned by mem_alloc. Refuses "
+            "(400) an address this API never allocated, one already "
+            "freed, or one it never got back a success for - never a "
+            "guess at what might be at that address. Also refuses if "
+            "the block's owner has changed since it was allocated: "
+            "DOS reclaims a conventional/UMA block when the program it "
+            "belonged to exits, and can hand that same memory to a "
+            "different, currently-running program - freeing it at that "
+            "point would corrupt that program's memory. Free a block "
+            "before the program active at mem_alloc time exits; this "
+            "is not a heap independent of DOS process lifetime."
+        ),
+        read_only=False,
+        schema={
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Physical address returned by mem_alloc.",
+                },
+            },
+            "required": ["addr"],
+        },
+        handler=lambda args: _mem_free(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mem_allocations",
+        description=(
+            "List every block this API has allocated and not yet "
+            "freed, plus free-memory totals: 'conventionalFreeBytes' "
+            "(total free conventional memory) and "
+            "'conventionalLargestBlockBytes' (the single largest free "
+            "block - what actually bounds the next mem_alloc call, "
+            "since a request bigger than this fails even when the "
+            "total free bytes would suggest otherwise), 'umbFreeBytes', "
+            "and 'xmsFreeBytes'. 'conventionalTruncated'/'umbTruncated' "
+            "are true if the underlying MCB chain walk was cut short "
+            "(corrupt chain, or a 1000-block cap) - the free-byte totals "
+            "may then be an undercount."
+        ),
+        read_only=True,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _mem_allocations(client),
+        feature=feature,
+    )
+
+
+def _mem_alloc(client, args):
+    import mcp.types as types
+    body = {"size": args["size"]}
+    if "area" in args:
+        body["area"] = args["area"]
+    if "strategy" in args:
+        body["strategy"] = args["strategy"]
+    result = client.post("/api/v1/memory/allocate", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _mem_free(client, args):
+    import mcp.types as types
+    body = {"addr": args["addr"]}
+    client.post("/api/v1/memory/free", json=body)
+    return [types.TextContent(type="text", text=json.dumps({"status": "ok"}))]
+
+
+def _mem_allocations(client):
+    import mcp.types as types
+    result = client.get("/api/v1/memory/allocations")
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
 def _mem_snapshot(client, args):
     import mcp.types as types
     body = {"start": args["start"], "end": args["end"]}

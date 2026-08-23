@@ -11,7 +11,10 @@ from dosbox_mcp.client import DosboxError
 from dosbox_mcp.tools.memory import (
     MAX_LENGTH_BYTES,
     MAX_RENDERED_VIEW_BYTES,
+    _mem_alloc,
+    _mem_allocations,
     _mem_diff,
+    _mem_free,
     _mem_path,
     _mem_read,
     _mem_scan,
@@ -520,3 +523,102 @@ def test_mem_diff_returns_candidates_and_total():
     assert body["total"] == 3
     assert body["candidates"] == 3
     assert body["matches"][0]["addr"] == 100
+
+
+# ---------------------------------------------------------------------------
+# mem_alloc / mem_free / mem_allocations
+# ---------------------------------------------------------------------------
+
+
+def test_mem_alloc_posts_size_only_when_area_and_strategy_omitted():
+    client = _FakeClient({"addr": 1048576})
+    _mem_alloc(client, {"size": 4096})
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/memory/allocate"
+    assert client.last_kwargs["json"] == {"size": 4096}
+
+
+def test_mem_alloc_passes_area_and_strategy_through_when_given():
+    client = _FakeClient({"addr": 1048576})
+    _mem_alloc(client, {"size": 4096, "area": "XMS", "strategy": "BEST_FIT"})
+    assert client.last_kwargs["json"] == {
+        "size": 4096, "area": "XMS", "strategy": "BEST_FIT",
+    }
+
+
+def test_mem_alloc_returns_the_allocated_address():
+    client = _FakeClient({"addr": 1048576})
+    result = _mem_alloc(client, {"size": 4096})
+    body = json.loads(result[0].text)
+    assert body["addr"] == 1048576
+
+
+def test_mem_alloc_propagates_a_dosbox_error_on_failure():
+    # A 503 (registry_full or insufficient_memory): DosboxClient._handle
+    # raises DosboxError on any >=400 response - the handler must not
+    # swallow it (e.g. by wrapping client.post in a try/except the way
+    # _mem_write handles its own 412 conflict), or a real allocation
+    # failure would surface as fabricated success instead of isError.
+    client = _FakeClient()
+    client.post = lambda *a, **k: (_ for _ in ()).throw(
+        DosboxError(503, "insufficient_memory",
+                    "insufficient free memory for this allocation"))
+    with pytest.raises(DosboxError):
+        _mem_alloc(client, {"size": 65535})
+
+
+def test_mem_free_posts_addr():
+    client = _FakeClient(b"")
+    _mem_free(client, {"addr": 1048576})
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/memory/free"
+    assert client.last_kwargs["json"] == {"addr": 1048576}
+
+
+def test_mem_free_reports_ok_on_the_engines_empty_success_body():
+    # POST /memory/free returns 200 with no body on success (the engine
+    # never calls send_json on that path) - the handler must not choke
+    # on that, or assume the empty bytes/response object is JSON.
+    client = _FakeClient(b"")
+    result = _mem_free(client, {"addr": 1048576})
+    body = json.loads(result[0].text)
+    assert body == {"status": "ok"}
+
+
+def test_mem_free_propagates_a_dosbox_error_on_failure():
+    # An untracked/already-freed addr: DosboxClient._handle raises
+    # DosboxError on any >=400 response - the handler must not swallow
+    # it, so guard() can turn it into an isError result upstream.
+    client = _FakeClient()
+    client.post = lambda *a, **k: (_ for _ in ()).throw(
+        DosboxError(400, "invalid_argument", "addr was not allocated "
+                                             "through this API"))
+    with pytest.raises(DosboxError):
+        _mem_free(client, {"addr": 1048576})
+
+
+def test_mem_allocations_gets_with_no_params():
+    client = _FakeClient({"allocations": [], "conventionalFreeBytes": 0,
+                          "conventionalLargestBlockBytes": 0,
+                          "conventionalTruncated": False,
+                          "umbFreeBytes": 0, "umbTruncated": False,
+                          "xmsFreeBytes": 0})
+    _mem_allocations(client)
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/memory/allocations"
+
+
+def test_mem_allocations_returns_the_full_response():
+    response = {
+        "allocations": [{"addr": 1048576, "size": 4096, "area": "CONV"}],
+        "conventionalFreeBytes": 634880,
+        "conventionalLargestBlockBytes": 634880,
+        "conventionalTruncated": False,
+        "umbFreeBytes": 0,
+        "umbTruncated": False,
+        "xmsFreeBytes": 66060288,
+    }
+    client = _FakeClient(response)
+    result = _mem_allocations(client)
+    body = json.loads(result[0].text)
+    assert body == response

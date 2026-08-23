@@ -41,6 +41,9 @@ def test_all_tools_registered_regardless_of_features():
     assert "input_key" in names
     assert "mem_search" in names
     assert "dos_memory_map" in names
+    assert "mem_alloc" in names
+    assert "mem_free" in names
+    assert "mem_allocations" in names
     assert "freeze_set" in names
     assert "freeze_list" in names
     assert "freeze_clear" in names
@@ -74,6 +77,9 @@ class TestCapabilityModes:
         assert "script_run" not in names
         assert "drive_swap" not in names
         assert "port_write" not in names
+        assert "mem_allocations" in names
+        assert "mem_alloc" not in names
+        assert "mem_free" not in names
         # debug_map_set_base mutates only the bridge's own local
         # address-mapping bookkeeping, never the connected engine or
         # guest, so it's available in every mode - see
