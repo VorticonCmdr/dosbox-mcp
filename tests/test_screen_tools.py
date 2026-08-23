@@ -2,7 +2,11 @@
 # License: GPL-2.0-or-later. Contact: dosbox-mcp@trinity2k.net
 #
 
-from dosbox_mcp.tools.screen import _screen_text
+import jsonschema
+import mcp.types as types
+import pytest
+
+from dosbox_mcp.tools.screen import _screen_capture, _screen_text
 
 
 class _FakeClient:
@@ -130,3 +134,180 @@ def test_row_numbers_are_zero_based_matching_cursor_row():
     lines = text.splitlines()
     assert lines[1] == "0 A"
     assert lines[4] == "3 D"
+
+
+# ---------------------------------------------------------------------------
+# screen_capture
+# ---------------------------------------------------------------------------
+
+
+class _FakeCaptureClient:
+    def __init__(self, response=b"\x89PNG..."):
+        self._response = response
+        self.last_path = None
+        self.last_params = None
+
+    def get(self, path, params=None, **kwargs):
+        self.last_path = path
+        self.last_params = params
+        return self._response
+
+
+def _capture_schema():
+    from dosbox_mcp.tools import screen
+
+    captured = {}
+
+    def add_tool(name, schema=None, **kwargs):
+        if name == "screen_capture":
+            captured["schema"] = schema
+
+    screen.register(server=None, client=None, add_tool=add_tool)
+    return captured["schema"]
+
+
+def test_default_capture_only_asks_for_png():
+    client = _FakeCaptureClient()
+    _screen_capture(client, {})
+
+    assert client.last_path == "/api/v1/video/frame"
+    assert client.last_params == {"format": "png"}
+
+
+def test_mode_is_forwarded():
+    client = _FakeCaptureClient()
+    _screen_capture(client, {"mode": "rendered"})
+
+    assert client.last_params["mode"] == "rendered"
+
+
+def test_format_raw_is_rejected_even_bypassing_schema_validation():
+    # The schema's format enum (png/jpeg only) already blocks this
+    # through the real MCP dispatch path - this calls the handler
+    # directly, the same way a caller who bypassed schema validation
+    # would, to confirm the handler's own defense-in-depth check holds:
+    # 'raw' pixel bytes must never come back claiming an image/* mimeType.
+    client = _FakeCaptureClient()
+    result = _screen_capture(client, {"format": "raw"})
+
+    assert client.last_path is None  # never reached the engine
+    assert isinstance(result, types.CallToolResult)
+    assert result.isError
+
+
+def test_quality_is_forwarded_only_for_jpeg():
+    client = _FakeCaptureClient()
+    _screen_capture(client, {"format": "jpeg", "quality": 50})
+    assert client.last_params == {"format": "jpeg", "quality": 50}
+
+    _screen_capture(client, {"format": "png", "quality": 50})
+    assert "quality" not in client.last_params
+
+
+def test_png_level_is_forwarded_only_for_png():
+    client = _FakeCaptureClient()
+    _screen_capture(client, {"format": "png", "png_level": 9})
+    assert client.last_params == {"format": "png", "png_level": 9}
+
+    _screen_capture(client, {"format": "jpeg", "png_level": 9})
+    assert "png_level" not in client.last_params
+
+
+def test_scale_is_forwarded():
+    client = _FakeCaptureClient()
+    _screen_capture(client, {"scale": 4})
+    assert client.last_params["scale"] == 4
+
+
+def test_crop_fields_are_forwarded_together():
+    client = _FakeCaptureClient()
+    _screen_capture(
+        client, {"crop_x": 1, "crop_y": 2, "crop_w": 3, "crop_h": 4}
+    )
+    assert client.last_params == {
+        "format": "png", "crop_x": 1, "crop_y": 2, "crop_w": 3, "crop_h": 4,
+    }
+
+
+def test_result_mime_type_matches_the_requested_format():
+    client = _FakeCaptureClient()
+
+    png_result = _screen_capture(client, {})
+    assert png_result[0].mimeType == "image/png"
+
+    jpeg_result = _screen_capture(client, {"format": "jpeg"})
+    assert jpeg_result[0].mimeType == "image/jpeg"
+
+
+def test_result_data_is_base64_of_the_raw_response():
+    import base64
+
+    client = _FakeCaptureClient(response=b"raw-bytes")
+    result = _screen_capture(client, {})
+
+    assert base64.b64decode(result[0].data) == b"raw-bytes"
+
+
+# Schema checks run against the real registered schema (not a hand-copied
+# duplicate), so a future edit to screen.py can't silently drift from what
+# these tests assert.
+
+
+def test_schema_rejects_an_unknown_property():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"bogus": 1}, _capture_schema())
+
+
+def test_schema_rejects_a_partial_crop_rectangle():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"crop_x": 0, "crop_y": 0}, _capture_schema())
+
+
+def test_schema_rejects_exactly_one_crop_field():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"crop_x": 0}, _capture_schema())
+
+
+def test_schema_rejects_exactly_three_crop_fields():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"crop_x": 0, "crop_y": 0, "crop_w": 10}, _capture_schema()
+        )
+
+
+def test_schema_rejects_a_crop_coordinate_past_the_engines_bound():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {"crop_x": 65536, "crop_y": 0, "crop_w": 1, "crop_h": 1},
+            _capture_schema(),
+        )
+
+
+def test_schema_accepts_a_full_crop_rectangle():
+    jsonschema.validate(
+        {"crop_x": 0, "crop_y": 0, "crop_w": 10, "crop_h": 10},
+        _capture_schema(),
+    )
+
+
+def test_schema_accepts_no_crop_at_all():
+    jsonschema.validate({}, _capture_schema())
+
+
+def test_schema_rejects_a_scale_not_in_the_fixed_divisor_set():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"scale": 3}, _capture_schema())
+
+
+def test_schema_rejects_an_out_of_range_quality():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"quality": 0}, _capture_schema())
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"quality": 101}, _capture_schema())
+
+
+def test_schema_rejects_an_out_of_range_png_level():
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"png_level": -1}, _capture_schema())
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"png_level": 10}, _capture_schema())
