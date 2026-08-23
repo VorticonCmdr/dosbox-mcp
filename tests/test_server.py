@@ -431,7 +431,7 @@ class TestSymbolAnnotationEndToEnd:
         is_error, text = _call(server, "dos_memory_map", {})
 
         assert not is_error
-        assert json.loads(text)[0]["symbol"] == "base"
+        assert json.loads(text)["blocks"][0]["symbol"] == "base"
 
     def test_debug_disassemble_gets_a_symbol_on_its_instruction(self, monkeypatch, tmp_path):
         server = self._server(monkeypatch, tmp_path)

@@ -9,13 +9,29 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="dosbox_status",
         description=(
-            "Machine state: what program is running, mount status, version. "
-            "One call answers 'what is the machine doing right now'."
+            "Machine state: what program is running, which drives are "
+            "mounted, and the engine version - one call answers 'what is "
+            "the machine doing right now'. This is a curated summary, not "
+            "a passthrough of the underlying routes; set detail:true for "
+            "the full raw payload (every unmounted drive letter, build "
+            "capabilities and limits, internal timing fields)."
         ),
         risk="read",
         title="Machine Status",
-        schema={"type": "object", "properties": {}},
-        handler=lambda args: _status(client),
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "detail": {
+                    "type": "boolean",
+                    "description": (
+                        "Include the full raw status/drives/info payloads "
+                        "alongside the summary (default false)."
+                    ),
+                },
+            },
+        },
+        handler=lambda args: _status(client, args),
     )
 
     add_tool(
@@ -44,14 +60,45 @@ def register(server, client, add_tool, feature=None):
     )
 
 
-def _status(client):
+def _status(client, args):
     import mcp.types as types
-    combined = {
-        "status": client.get("/api/v1/status"),
-        "program": client.get("/api/v1/program/state"),
-        "info": client.get("/api/v1/dosbox/info"),
+
+    # /api/v1/program/state is a strict subset of /api/v1/status
+    # (segment_name/canonical_name/is_shell/is_booted, just under a
+    # different key for the program name) - fetching it too would only
+    # repeat data /status already has, so it's not called here at all.
+    status = client.get("/api/v1/status")
+    drives = client.get("/api/v1/drive").get("drives", [])
+    info = client.get("/api/v1/dosbox/info")
+
+    mounted_drives = {
+        d["letter"]: {
+            "type": d.get("type"),
+            "info": d.get("info"),
+            "read_only": d.get("read_only"),
+            "removable": d.get("removable"),
+        }
+        for d in drives
+        if d.get("mounted")
     }
-    return [types.TextContent(type="text", text=json.dumps(combined, indent=2))]
+
+    out = {
+        "running": status.get("running"),
+        "emulation": status.get("emulation"),
+        "program": status.get("program"),
+        "canonical_name": status.get("canonical_name"),
+        "is_shell": status.get("is_shell"),
+        "is_booted": status.get("is_booted"),
+        "frame": status.get("frame"),
+        "version": info.get("version"),
+        "mounted_drives": mounted_drives,
+    }
+    if args.get("detail"):
+        out["status"] = status
+        out["drives"] = drives
+        out["info"] = info
+
+    return [types.TextContent(type="text", text=json.dumps(out))]
 
 
 def _shutdown(client):

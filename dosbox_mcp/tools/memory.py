@@ -494,14 +494,38 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
         name="dos_memory_map",
         description=(
             "Walk the DOS MCB chain and report which PSP owns which memory "
-            "block. Shows the full conventional memory layout. Each block "
-            "gets a 'symbol' field when a loaded symbol covers its segment "
-            "(debug_symbols_load) - omitted otherwise."
+            "block. 'blocks' is the conventional memory layout; each "
+            "block gets a 'symbol' field when a loaded symbol covers its "
+            "segment (debug_symbols_load) - omitted otherwise. "
+            "'free_bytes'/'largest_free_bytes' summarize the free blocks "
+            "so a caller doesn't have to walk 'blocks' just to answer "
+            "'is there room'. 'truncated' is true if the walk was cut "
+            "short (corrupt chain, or a 1000-block cap) - 'blocks' is "
+            "then incomplete and free_bytes/largest_free_bytes may be an "
+            "undercount, the same caveat mem_allocations documents for "
+            "its own analogous fields. Set detail:true to also get "
+            "'list_of_lists', 'dos_swappable_area', and 'first_shell' - "
+            "raw physical addresses this route reads but drops by "
+            "default, since nothing else here interprets them; each is "
+            "readable with mem_read (omit 'segment' - these are already "
+            "linear offsets)."
         ),
         risk="read",
         title="DOS Memory Map",
-        schema={"type": "object", "properties": {}},
-        handler=lambda args: _dos_memory_map(client, annotate),
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "detail": {
+                    "type": "boolean",
+                    "description": (
+                        "Also return list_of_lists/dos_swappable_area/"
+                        "first_shell (default false)."
+                    ),
+                },
+            },
+        },
+        handler=lambda args: _dos_memory_map(client, args, annotate),
         feature=feature,
     )
 
@@ -764,7 +788,7 @@ def _mem_diff(client, args):
     if "limit" in args:
         body["limit"] = args["limit"]
     result = client.post("/api/v1/memory/diff", json=body)
-    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+    return [types.TextContent(type="text", text=json.dumps(result))]
 
 
 def _mem_search(client, args):
@@ -778,7 +802,7 @@ def _mem_search(client, args):
     if "limit" in args:
         body["limit"] = args["limit"]
     result = client.post("/api/v1/memory/search", json=body)
-    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+    return [types.TextContent(type="text", text=json.dumps(result))]
 
 
 def _mem_scan(client, args):
@@ -791,10 +815,10 @@ def _mem_scan(client, args):
     if "limit" in args:
         body["limit"] = args["limit"]
     result = client.post("/api/v1/memory/scan", json=body)
-    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+    return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _dos_memory_map(client, annotate=None):
+def _dos_memory_map(client, args, annotate=None):
     import mcp.types as types
     result = client.get("/api/v1/dos/internals")
     mem_map = result.get("memoryMap", [])
@@ -809,4 +833,21 @@ def _dos_memory_map(client, annotate=None):
             symbol = annotate(block["segment"] + 1, 0)
             if symbol is not None:
                 block["symbol"] = symbol
-    return [types.TextContent(type="text", text=json.dumps(mem_map, indent=2))]
+
+    # MCB_FREE (dos.h) - the same convention dos.cpp's own
+    # MemoryAllocationsCommand uses to total up free conventional memory.
+    free_blocks = [b["sizeBytes"] for b in mem_map if b.get("pspSegment") == 0]
+
+    out = {
+        "block_count": len(mem_map),
+        "truncated": result.get("memoryMapTruncated", False),
+        "free_bytes": sum(free_blocks),
+        "largest_free_bytes": max(free_blocks, default=0),
+        "blocks": mem_map,
+    }
+    if args.get("detail"):
+        out["list_of_lists"] = result.get("listOfLists")
+        out["dos_swappable_area"] = result.get("dosSwappableArea")
+        out["first_shell"] = result.get("firstShell")
+
+    return [types.TextContent(type="text", text=json.dumps(out))]

@@ -635,12 +635,13 @@ def test_dos_memory_map_gets_and_returns_the_map_unannotated_with_no_annotate():
     response = {"memoryMap": [_mcb_block(0x1000)], "otherField": "ignored"}
     client = _FakeClient(response)
 
-    result = _dos_memory_map(client)
+    result = _dos_memory_map(client, {})
 
     assert client.last_method == "get"
     assert client.last_path == "/api/v1/dos/internals"
-    block = json.loads(result[0].text)[0]
-    assert "symbol" not in block
+    body = json.loads(result[0].text)
+    assert body["block_count"] == 1
+    assert "symbol" not in body["blocks"][0]
 
 
 def test_dos_memory_map_annotates_each_block_by_its_owned_segment_not_its_mcb_header():
@@ -654,8 +655,62 @@ def test_dos_memory_map_annotates_each_block_by_its_owned_segment_not_its_mcb_he
     def annotate(segment, offset):
         return "main" if (segment, offset) == (0x1000, 0) else None
 
-    result = _dos_memory_map(client, annotate)
+    result = _dos_memory_map(client, {}, annotate)
 
-    blocks = json.loads(result[0].text)
+    blocks = json.loads(result[0].text)["blocks"]
     assert blocks[0]["symbol"] == "main"
     assert "symbol" not in blocks[1]
+
+
+def test_dos_memory_map_summarizes_free_bytes_and_omits_detail_by_default():
+    response = {
+        "memoryMap": [
+            _mcb_block(0x1000, psp_segment=0),  # free: 160 bytes
+            _mcb_block(0x1100, psp_segment=5),  # owned
+            _mcb_block(0x1200, psp_segment=0, is_last=True),  # free: 160 bytes
+        ],
+        "memoryMapTruncated": False,
+        "listOfLists": 12345,
+        "dosSwappableArea": 23456,
+        "firstShell": 34567,
+    }
+    client = _FakeClient(response)
+
+    result = _dos_memory_map(client, {})
+
+    body = json.loads(result[0].text)
+    assert body["block_count"] == 3
+    assert body["truncated"] is False
+    assert body["free_bytes"] == 320
+    assert body["largest_free_bytes"] == 160
+    assert "list_of_lists" not in body
+    assert "dos_swappable_area" not in body
+    assert "first_shell" not in body
+
+
+def test_dos_memory_map_detail_true_adds_the_raw_dos_internals_fields():
+    response = {
+        "memoryMap": [_mcb_block(0x1000, psp_segment=0)],
+        "listOfLists": 12345,
+        "dosSwappableArea": 23456,
+        "firstShell": 34567,
+    }
+    client = _FakeClient(response)
+
+    result = _dos_memory_map(client, {"detail": True})
+
+    body = json.loads(result[0].text)
+    assert body["list_of_lists"] == 12345
+    assert body["dos_swappable_area"] == 23456
+    assert body["first_shell"] == 34567
+
+
+def test_dos_memory_map_with_no_free_blocks_reports_zero_not_an_error():
+    response = {"memoryMap": [_mcb_block(0x1000, psp_segment=5, is_last=True)]}
+    client = _FakeClient(response)
+
+    result = _dos_memory_map(client, {})
+
+    body = json.loads(result[0].text)
+    assert body["free_bytes"] == 0
+    assert body["largest_free_bytes"] == 0
