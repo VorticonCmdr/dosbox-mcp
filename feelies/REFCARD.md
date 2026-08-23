@@ -48,8 +48,9 @@ These work whether or not an engine is connected.
   `{"key": "KBD_enter"}`
 - **input_sequence** - a timed sequence of key and mouse events on one
   timeline (each event has a `type`, its data, and an optional
-  `delay_ms`).
+  `delay_ms`), or replay a stored recording by name instead.
   `{"events": [{"key": "KBD_up"}, {"key": "KBD_enter", "delay_ms": 100}]}`
+  or `{"recording": "install-run-1"}`
 - **input_type** - type a string, paced so the keyboard buffer keeps
   up. `{"text": "dir *.exe"}`
 - **replay_status** (read-only) - progress of the current or most
@@ -57,6 +58,18 @@ These work whether or not an engine is connected.
   dispatched, remaining, elapsed_ms, drift_ms, current_frame. `{}`
 - **replay_cancel** - stop the running input_sequence chain early.
   `{}`
+- **record_start** - start recording keyboard/mouse input. `{}`
+- **record_pause** - toggle pause on the running recording. `{}`
+- **record_stop** - stop recording. Pass `name` to also save it in the
+  named store (see recordings_list); `include_events:false` omits the
+  raw event list from the response.
+  `{"name": "install-run-1", "include_events": false}`
+- **record_status** (read-only) - recording/paused, event count,
+  duration, truncated. `{}`
+- **recordings_list** (read-only) - metadata for every stored
+  recording: name, event_count, duration_ms, truncated. `{}`
+- **recording_delete** - remove a stored recording by name.
+  `{"name": "install-run-1"}`
 
 ## Memory (feature: memory)
 

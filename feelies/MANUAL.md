@@ -145,6 +145,28 @@ Once every disk an install needs is mounted, `mount_lock` freezes the
 configuration - no further mount attempt succeeds, agent-initiated or
 otherwise, for the rest of the session. There is no unlock.
 
+## Recording and replaying input
+
+`record_start` captures every keyboard and mouse action - human or
+agent-driven through this bridge's own tools - until `record_stop`.
+Input injected via `input_sequence`/`input_key`/`input_type` while
+recording is deliberately not captured, so replaying a recording never
+re-records itself.
+
+Pass `name` to `record_stop` to save the run into a named store instead
+of (or alongside) getting the raw event list back -
+`{"name": "install-run-1"}`. `recordings_list` shows what is stored;
+`input_sequence {"recording": "install-run-1"}` replays it, any number
+of times - replaying doesn't consume it. `recording_delete` removes
+one. The store is in-memory only and holds at most 20 recordings for
+the life of the process; nothing here survives a restart or needs
+cleanup on disk.
+
+This is the natural way to build a repeatable install script: drive an
+installer once by hand or with `input_sequence`, `record_stop` it with
+a name, then `input_sequence {"recording": "..."}` to replay the exact
+same install against a fresh copy of the guest.
+
 ## Reverse engineering with Ghidra (feature: debugger)
 
 Static analysis in Ghidra and live control through this bridge cover

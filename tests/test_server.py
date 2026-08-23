@@ -41,6 +41,12 @@ def test_all_tools_registered_regardless_of_features():
     assert "input_key" in names
     assert "replay_status" in names
     assert "replay_cancel" in names
+    assert "record_start" in names
+    assert "record_pause" in names
+    assert "record_stop" in names
+    assert "record_status" in names
+    assert "recordings_list" in names
+    assert "recording_delete" in names
     assert "mem_search" in names
     assert "dos_memory_map" in names
     assert "mem_alloc" in names
@@ -85,6 +91,10 @@ class TestCapabilityModes:
         assert "input_key" not in names
         assert "replay_status" in names
         assert "replay_cancel" not in names
+        assert "record_start" not in names
+        assert "record_status" in names
+        assert "recordings_list" in names
+        assert "recording_delete" not in names
         assert "script_run" not in names
         assert "drive_swap" not in names
         assert "mount_lock" not in names
@@ -121,6 +131,9 @@ class TestCapabilityModes:
         assert "input_key" in names
         assert "input_type" in names
         assert "replay_cancel" in names
+        assert "record_start" in names
+        assert "record_stop" in names
+        assert "recording_delete" in names
         assert "script_run" in names
         assert "video_capture_start" in names
         assert "drive_swap" in names

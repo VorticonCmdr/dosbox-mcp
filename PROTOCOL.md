@@ -116,7 +116,7 @@ verify the advertised contract against it.
 | session | `status`, `program/state`, `dosbox/info`, `dosbox/shutdown` | machine and program state; shutdown is irreversible |
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control; status reports path, frames, elapsed time and bytes written |
-| input | `input/sequence`, `input/type`, `input/replay/status` GET, `input/replay` DELETE | named-key sequences; paced string typing; replay progress and cancellation (feature: input) |
+| input | `input/sequence`, `input/type`, `input/replay/status` GET, `input/replay` DELETE, `input/record/start` POST, `input/record/pause` POST, `input/record/stop` POST, `input/record/status` GET, `input/recordings` GET, `input/recordings/{name}` DELETE | named-key sequences; paced string typing; replay progress and cancellation; recording and a named recording store (feature: input) |
 | memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff`, `memory/allocate` POST, `memory/free` POST, `memory/allocations` GET | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
@@ -313,6 +313,39 @@ Semantics that are part of the contract, not just the schemas:
   `total` after a run is the tell.
   `DELETE /input/replay` cancels whichever chain(s) are active; safe to
   call when nothing is running (`{cancelled: false}`, not an error).
+- `InputRecording` coalesces consecutive `mouse_move` samples landing
+  in the same rendered frame into one event (summed `x_rel`/`y_rel`,
+  latest `x_abs`/`y_abs`) - host mice sample far faster than the
+  render clock, and the frame-timed replay engine only ever dispatches
+  on frame boundaries anyway, so nothing is lost. A recording is
+  capped at `capabilities.input.limits.max_events` (32000) events;
+  past that, further events are dropped and `truncated` (in both `GET
+  /input/record/status` and the `POST /input/record/stop` response)
+  goes true. Input injected via `POST /input/sequence` while recording
+  is never captured - the `in_replay_dispatch` guard exists
+  specifically so a replay can't re-record itself.
+- `POST /input/record/stop?name=<name>` saves the recording into a
+  process-lifetime, in-memory named store under `<name>` (`<=`
+  `capabilities.input.limits.max_recording_name_length` chars,
+  `[A-Za-z0-9_-]`) in the same call - not a separate request, so there
+  is no window where the recording is stopped but not yet saved. An
+  invalid name, or a new name when the store is already at
+  `capabilities.input.limits.max_stored_recordings` capacity, is
+  refused (400 / 503 `registry_full`) *before* the recording is
+  actually stopped, so a refusal never loses data - the recording is
+  left running and the caller can retry (e.g. after `DELETE
+  /input/recordings/{name}` frees a slot) without having to redo it.
+  Saving under a name that already exists overwrites it and never
+  counts against the capacity limit. `?include_events=false` omits the
+  `events` array from the stop response - the recording is still saved
+  by name either way; this only controls whether the caller also
+  receives the raw list. `GET /input/recordings` lists every stored
+  recording's metadata (name, event count, duration, truncated) with
+  no way to fetch the raw events except by replaying them (`POST
+  /input/sequence {"recording": "<name>"}`). A stored recording always
+  replays through the frame-timed dispatch engine (every recorded
+  event carries a `frame`), and is copied, not consumed, on replay -
+  the same name can be replayed any number of times.
 - Validation lives engine-side. The engine is the trust boundary;
   a client talking HTTP directly must be subject to exactly the same
   limits as one going through a bridge.
@@ -513,3 +546,24 @@ changed and the version it produces.
   `capabilities.input.limits.replay_stall_threshold_ms` (5000 by
   default) of no dispatch progress, logging a warning and leaving the
   engine free to accept a new chain.
+- **1.10.0 (draft)** - documents `POST /input/record/start`,
+  `POST /input/record/pause`, `POST /input/record/stop`, and
+  `GET /input/record/status` for the first time (shipped earlier, but
+  never added to this spec) under the existing `input` feature flag,
+  and adds `GET /input/recordings` and
+  `DELETE /input/recordings/{name}`, a process-lifetime in-memory named
+  recording store. Two genuine behavior changes bundled with the
+  documentation catch-up: `POST /input/record/stop` gains optional
+  `name`/`include_events` query parameters (`name` saves the recording
+  into the new store in the same call; `include_events=false` omits
+  the `events` array from the response), and consecutive `mouse_move`
+  samples landing in the same rendered frame are now coalesced into
+  one event at record time rather than one event per host sample - a
+  long mouse-driven install session no longer balloons into tens of
+  thousands of near-duplicate events. Also adds `truncated` to both
+  `POST /input/record/stop`'s response and
+  `GET /input/record/status` (true once the new
+  `capabilities.input.limits.max_events` recording cap is hit), and a
+  `recording` field to `POST /input/sequence`'s request body as an
+  alternative to `events`, to replay a stored recording by name (404 if
+  the name doesn't exist).
