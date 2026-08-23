@@ -16,7 +16,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
     add_tool(
         name="debug_status",
         description="Debugger state: whether execution is currently paused.",
-        read_only=True,
+        risk="read",
+        title="Debugger Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _status(client, annotate),
         feature=feature,
@@ -25,7 +26,9 @@ def register(server, client, add_tool, feature=None, annotate=None):
     add_tool(
         name="debug_pause",
         description="Pause emulation at the current instruction.",
-        read_only=False,
+        risk="mutate_guest",
+        title="Pause Emulation",
+        idempotent=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _pause(client, annotate),
         feature=feature,
@@ -38,7 +41,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "were added while paused, they arm now and execution runs until "
             "one is hit or it is paused again."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Resume Emulation",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _continue(client),
         feature=feature,
@@ -54,12 +58,16 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "whole burst, not between each instruction, so a large count "
             "isn't equivalent to that many separate debug_step calls."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Step Instruction",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "count": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 64,
                     "description": "Instructions to execute (1-64, default 1).",
                 },
             },
@@ -83,7 +91,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "has the new record synchronously (or stepped:false if nothing "
             "was paused to begin with)."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Step Over",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _step_over(client, annotate),
         feature=feature,
@@ -97,16 +106,22 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "the actual stop happens arbitrarily later (poll debug_wait "
             "with the returned resumed_from_stop_id)."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Run To Address",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "segment": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "Target segment (0x0000..0xFFFF).",
                 },
                 "offset": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "Target offset.",
                 },
             },
@@ -131,7 +146,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "likely to land somewhere nonsensical. Check debug_backtrace "
             "first if you want to know why before calling this."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Step Out",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _step_out(client),
         feature=feature,
@@ -162,9 +178,11 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "changed a watched byte can be anywhere, not just at the "
             "watchpoint itself."
         ),
-        read_only=True,
+        risk="read",
+        title="Wait For Debugger Stop",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "since_stop_id": {
                     "type": "integer",
@@ -172,6 +190,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
                 },
                 "timeout_ms": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 15000,
                     "description": "Max wait, milliseconds (1-15000, default 5000).",
                 },
             },
@@ -212,9 +232,11 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "checked; delete the existing one first if you meant to "
             "replace it."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Add Breakpoint",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "type": {
                     "type": "string",
@@ -223,22 +245,32 @@ def register(server, client, add_tool, feature=None, annotate=None):
                 },
                 "segment": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "Segment for 'execute'/'memory' breakpoints (0x0000..0xFFFF).",
                 },
                 "offset": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "Offset for 'execute'/'memory' breakpoints.",
                 },
                 "int": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFF,
                     "description": "Interrupt number for 'interrupt' breakpoints (0x00..0xFF), e.g. 0x21 for DOS API calls.",
                 },
                 "ah": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFF,
                     "description": "AH value to match for 'interrupt' breakpoints (0x00..0xFF). Omit to match any AH.",
                 },
                 "al": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFF,
                     "description": "AL value to match for 'interrupt' breakpoints (0x00..0xFF). Omit to match any AL. Only meaningful with 'ah' also set.",
                 },
                 "once": {
@@ -247,10 +279,12 @@ def register(server, client, add_tool, feature=None, annotate=None):
                 },
                 "ignore_count": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "Skip this many genuine hits before actually stopping (default 0). Cannot combine with once=true.",
                 },
                 "condition": {
                     "type": "object",
+                    "additionalProperties": False,
                     "description": (
                         "Only actually stop when this holds (default: always stop on a "
                         "genuine hit). Exactly one of 'register' or "
@@ -270,14 +304,19 @@ def register(server, client, add_tool, feature=None, annotate=None):
                         },
                         "segment": {
                             "type": "integer",
+                            "minimum": 0,
+                            "maximum": 0xFFFF,
                             "description": "Segment for a memory-operand condition.",
                         },
                         "offset": {
                             "type": "integer",
+                            "minimum": 0,
+                            "maximum": 0xFFFF,
                             "description": "Offset for a memory-operand condition.",
                         },
                         "width": {
                             "type": "integer",
+                            "enum": [1, 2, 4],
                             "description": "Bytes to read for a memory-operand condition: 1, 2, or 4.",
                         },
                         "op": {
@@ -310,7 +349,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "ones skipped by 'ignore_count' or a false 'condition' - it does "
             "not mean the emulator actually stopped that many times."
         ),
-        read_only=True,
+        risk="read",
+        title="List Breakpoints",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _breakpoint_list(client),
         feature=feature,
@@ -323,9 +363,12 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "or by its current index. Specify exactly one of the two, or "
             "omit both to clear all breakpoints."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Delete Breakpoint",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "id": {
                     "type": "integer",
@@ -333,6 +376,7 @@ def register(server, client, add_tool, feature=None, annotate=None):
                 },
                 "index": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "Current list position to remove. Mutually exclusive with 'id'.",
                 },
             },
@@ -360,20 +404,28 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "symbol covers that address (debug_symbols_load) - omitted "
             "otherwise."
         ),
-        read_only=True,
+        risk="read",
+        title="Disassemble",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "segment": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "Segment (0x0000..0xFFFF).",
                 },
                 "offset": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "Offset.",
                 },
                 "count": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 256,
                     "description": "Instructions to decode (1-256).",
                 },
             },
@@ -408,12 +460,16 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "frame gets a 'symbol' field when a loaded symbol covers its "
             "segment:offset (debug_symbols_load) - omitted otherwise."
         ),
-        read_only=True,
+        risk="read",
+        title="Backtrace",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "max_frames": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 64,
                     "description": "Frames to walk at most (1-64, default 16).",
                 },
             },

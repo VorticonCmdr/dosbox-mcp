@@ -230,7 +230,13 @@ def to_error_result(message: str, *, tool: str | None = None,
     """Build a CallToolResult(isError=True). This is the only way to get
     isError set at all: the MCP SDK's call_tool wrapper hardcodes
     isError=False for any handler return value that is not already a
-    CallToolResult (see mcp.server.lowlevel.server.Server.call_tool)."""
+    CallToolResult (see mcp.server.lowlevel.server.Server.call_tool).
+    That passthrough needs mcp>=1.19 (pyproject.toml's floor) - below
+    it, call_tool has no CallToolResult special case, and pydantic's
+    own BaseModel.__iter__ makes one look like an iterable of
+    (field_name, value) tuples instead, which the wrapper then tries to
+    rebuild into content blocks and fails with a wall of validation
+    errors instead of the clean message built here."""
     bits = [b for b in (tool, route) if b]
     prefix = f"[{' '.join(bits)}] " if bits else ""
     text = f"{prefix}{message}"

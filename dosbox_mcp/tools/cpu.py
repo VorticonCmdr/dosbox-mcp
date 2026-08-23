@@ -14,11 +14,16 @@ def register_state(server, client, add_tool, feature=None):
             "live cs:eip for a paused program, e.g. to anchor a "
             "debug_map_set_base call against a Ghidra static address."
         ),
-        read_only=True,
+        risk="read",
+        title="Read CPU Registers",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _cpu_state(client),
         feature=feature,
     )
+
+
+_REGISTERS = ("eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
+             "cs", "ds", "es", "ss", "fs", "gs")
 
 
 def register(server, client, add_tool, feature=None):
@@ -29,16 +34,22 @@ def register(server, client, add_tool, feature=None):
             "32-bit values. Segment registers (cs,ds,es,ss,fs,gs) accept "
             "16-bit values and update the cached physical base."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Write CPU Register",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "register": {
                     "type": "string",
+                    "enum": list(_REGISTERS),
                     "description": "Register name: eax, ebx, ecx, edx, esi, edi, esp, ebp, cs, ds, es, ss, fs, gs.",
                 },
                 "value": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFFFFFF,
                     "description": "Value to write (0..0xFFFFFFFF for general, 0..0xFFFF for segment).",
                 },
             },

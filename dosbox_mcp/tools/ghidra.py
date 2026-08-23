@@ -88,9 +88,12 @@ def register(server, client, add_tool, feature=None):
             "debug_map_auto, which derives segment and delta from a "
             "byte signature instead of a manual pause."
         ),
-        read_only=False,
+        risk="mutate_host",
+        title="Anchor Ghidra Mapping",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "ghidra_address": {
                     "type": "integer",
@@ -145,9 +148,11 @@ def register(server, client, add_tool, feature=None):
             "a function address found in Ghidra into an execute "
             "breakpoint's segment/offset."
         ),
-        read_only=True,
+        risk="read",
+        title="Ghidra Address to Live",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "ghidra_address": {"type": "integer", "minimum": 0},
             },
@@ -168,9 +173,11 @@ def register(server, client, add_tool, feature=None):
             "what a paused cs:eip corresponds to in the decompilation. "
             "Refuses (rather than guessing) when no range covers it."
         ),
-        read_only=True,
+        risk="read",
+        title="Live Address to Ghidra",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "live_segment": {"type": "integer", "minimum": 0, "maximum": 0xFFFF},
                 "live_offset": {"type": "integer", "minimum": 0, "maximum": 0xFFFF},
@@ -192,7 +199,8 @@ def register(server, client, add_tool, feature=None):
             "anything - its live segment isn't safe to assume across a "
             "restart even though its delta and label survive."
         ),
-        read_only=True,
+        risk="read",
+        title="Ghidra Mapping Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _status(state),
         feature=None,
@@ -237,9 +245,11 @@ def register_auto(server, client, add_tool, state, feature=None):
             "the other debug_map_* tools, this one reads live engine "
             "memory, not just local bookkeeping."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Auto-Anchor Ghidra Mapping",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "pattern": {
                     "type": "string",

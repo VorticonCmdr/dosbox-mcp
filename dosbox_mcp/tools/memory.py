@@ -30,6 +30,14 @@ _SEGMENT_REGISTERS = ("cs", "ds", "es", "fs", "gs", "ss")
 # oversized payload into the bridge process and onto the wire).
 _MAX_WRITE_DATA_CHARS = -(-MAX_LENGTH_BYTES // 3) * 4
 
+# Mirrors the engine's own DefaultSearchLimit/MaxSearchLimit
+# (src/webserver/private/memory.h), shared by mem_search/mem_scan/
+# mem_diff's 'limit' field - duplicated here for the same reason as
+# input.py's constants: schemas are built once at startup, before any
+# live capabilities response exists to read the real numbers from.
+DEFAULT_SEARCH_LIMIT = 256
+MAX_SEARCH_LIMIT = 4096
+
 
 def register(server, client, add_tool, feature=None):
     add_tool(
@@ -53,9 +61,11 @@ def register(server, client, add_tool, feature=None):
             "optimization, since the engine loads them unconditionally "
             "either way."
         ),
-        read_only=True,
+        risk="read",
+        title="Read Memory",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "segment": {
                     "type": ["string", "integer"],
@@ -81,6 +91,7 @@ def register(server, client, add_tool, feature=None):
                         f"{DEFAULT_LENGTH}; rendered views cap at "
                         f"{MAX_RENDERED_VIEW_BYTES})."
                     ),
+                    "minimum": 1,
                     "maximum": MAX_LENGTH_BYTES,
                 },
                 "view": {
@@ -117,9 +128,12 @@ def register(server, client, add_tool, feature=None):
             "retry instead of guessing or blindly clobbering. Omit "
             "'expected' for an unconditional write."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Write Memory",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "segment": {
                     "type": ["string", "integer"],
@@ -382,16 +396,20 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
             "can match far more times than are useful to see at once, so "
             "check 'truncated' rather than assume 'matches' is complete."
         ),
-        read_only=True,
+        risk="read",
+        title="Search Memory",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "start": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "Start of search range (physical address).",
                 },
                 "end": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "End of search range (exclusive).",
                 },
                 "value": {
@@ -400,12 +418,15 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
                 },
                 "width": {
                     "type": "integer",
+                    "enum": [1, 2, 4],
                     "description": "Width in bytes: 1, 2, or 4 (default 1).",
                     "default": 1,
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max matches to return (1-4096, default 256).",
+                    "minimum": 1,
+                    "maximum": MAX_SEARCH_LIMIT,
+                    "description": f"Max matches to return (1-{MAX_SEARCH_LIMIT}, default {DEFAULT_SEARCH_LIMIT}).",
                 },
             },
             "required": ["start", "end", "value"],
@@ -433,9 +454,11 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
             "real instruction underneath - a plain mem_read over the "
             "same address would see the trap."
         ),
-        read_only=True,
+        risk="read",
+        title="Scan Memory Pattern",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "pattern": {
                     "type": "string",
@@ -446,15 +469,19 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
                 },
                 "start": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "Start of scan range (physical address).",
                 },
                 "end": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "End of scan range (exclusive).",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max matches to return (1-4096, default 256).",
+                    "minimum": 1,
+                    "maximum": MAX_SEARCH_LIMIT,
+                    "description": f"Max matches to return (1-{MAX_SEARCH_LIMIT}, default {DEFAULT_SEARCH_LIMIT}).",
                 },
             },
             "required": ["pattern", "start", "end"],
@@ -471,7 +498,8 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
             "gets a 'symbol' field when a loaded symbol covers its segment "
             "(debug_symbols_load) - omitted otherwise."
         ),
-        read_only=True,
+        risk="read",
+        title="DOS Memory Map",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _dos_memory_map(client, annotate),
         feature=feature,
@@ -492,16 +520,25 @@ def register_snapshot(server, client, add_tool, feature=None):
             "again, mem_diff the same handle again to narrow further. "
             "Returns a 'handle' to pass to mem_diff."
         ),
-        read_only=True,
+        # Not "read": this allocates and mutates an entry in the
+        # engine's process-wide SnapshotRegistry (up to 32 MiB total,
+        # LRU-evicted - a call here can evict another session's
+        # entries), which observe mode's "never touch the engine"
+        # guarantee is supposed to rule out.
+        risk="mutate_guest",
+        title="Snapshot Memory",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "start": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "Start of the range to capture (physical address).",
                 },
                 "end": {
                     "type": "integer",
+                    "minimum": 0,
                     "description": "End of the range (exclusive).",
                 },
             },
@@ -539,9 +576,15 @@ def register_snapshot(server, client, add_tool, feature=None):
             "something to keep refining). A handle that narrows to zero "
             "candidates is gone; the next mem_diff on it fails."
         ),
-        read_only=True,
+        # Not "read" either: mutates the snapshot entry in place
+        # (narrows its candidate set, bumps its generation counter) and
+        # can delete it outright once nothing survives - see
+        # mem_snapshot's own comment.
+        risk="mutate_guest",
+        title="Diff Memory Snapshot",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "handle": {
                     "type": "integer",
@@ -564,7 +607,9 @@ def register_snapshot(server, client, add_tool, feature=None):
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max matches to return (1-4096, default 256).",
+                    "minimum": 1,
+                    "maximum": MAX_SEARCH_LIMIT,
+                    "description": f"Max matches to return (1-{MAX_SEARCH_LIMIT}, default {DEFAULT_SEARCH_LIMIT}).",
                 },
             },
             "required": ["handle", "op"],
@@ -593,9 +638,11 @@ def register_allocation(server, client, add_tool, feature=None):
             "hand it to something else, and mem_free refuses rather "
             "than freeing a block whose owner has since changed."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Allocate Memory",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "size": {
                     "type": "integer",
@@ -635,13 +682,17 @@ def register_allocation(server, client, add_tool, feature=None):
             "before the program active at mem_alloc time exits; this "
             "is not a heap independent of DOS process lifetime."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Free Memory",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "addr": {
                     "type": "integer",
                     "minimum": 0,
+                    "maximum": 0xFFFFFFFF,
                     "description": "Physical address returned by mem_alloc.",
                 },
             },
@@ -666,7 +717,8 @@ def register_allocation(server, client, add_tool, feature=None):
             "(corrupt chain, or a 1000-block cap) - the free-byte totals "
             "may then be an undercount."
         ),
-        read_only=True,
+        risk="read",
+        title="List Allocations",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _mem_allocations(client),
         feature=feature,

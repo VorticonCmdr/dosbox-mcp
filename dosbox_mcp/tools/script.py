@@ -10,12 +10,20 @@ def register(server, client, add_tool, feature=None):
         name="script_run",
         description=(
             "Load and start a Lua script. The script runs sandboxed on the "
-            "emulation thread. Any DOS automation capability without a "
-            "dedicated tool is reachable through a Lua script."
+            "emulation thread. Reaches DOS memory (read/write), text-mode "
+            "screen reads, keyboard/mouse injection (relative-only, no "
+            "wheel), video capture start/stop, and drive-mount locking. "
+            "It does NOT reach port I/O, CPU registers, the debugger, "
+            "memory freeze/search, drive swapping, pixel-level screen "
+            "capture, or absolute mouse positioning - use the dedicated "
+            "tools for those."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Run Lua Script",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "script": {
                     "type": "string",
@@ -33,7 +41,8 @@ def register(server, client, add_tool, feature=None):
             "Check the running script's state and read its output table. "
             "Scripts communicate results through dosbox.output['key'] = value."
         ),
-        read_only=True,
+        risk="read",
+        title="Script Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _script_status(client),
     )
@@ -41,7 +50,10 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="script_stop",
         description="Stop a running Lua script.",
-        read_only=False,
+        risk="mutate_guest",
+        title="Stop Script",
+        interact_ok=True,
+        idempotent=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _script_stop(client),
     )

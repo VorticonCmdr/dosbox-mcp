@@ -12,7 +12,8 @@ def register(server, client, add_tool, feature=None):
             "Machine state: what program is running, mount status, version. "
             "One call answers 'what is the machine doing right now'."
         ),
-        read_only=True,
+        risk="read",
+        title="Machine Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _status(client),
     )
@@ -20,7 +21,8 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="dosbox_shutdown",
         description="Shut down the emulator. Irreversible.",
-        read_only=False,
+        risk="destructive",
+        title="Shut Down Emulator",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _shutdown(client),
     )
@@ -35,7 +37,8 @@ def register(server, client, add_tool, feature=None):
             "The token value itself is never returned - it stays out of "
             "transcripts by design."
         ),
-        read_only=True,
+        risk="read",
+        title="Session Info",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _session_info(client),
     )

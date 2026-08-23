@@ -99,9 +99,12 @@ def register(server, client, add_tool, feature=None):
             "dropped because the table already holds "
             f"{MaxSymbols} symbols."
         ),
-        read_only=False,
+        risk="mutate_host",
+        title="Load Symbols",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "text": {
                     "type": "string",
@@ -126,7 +129,8 @@ def register(server, client, add_tool, feature=None):
             "How many symbols are currently loaded (debug_symbols_load) "
             "and available for address annotation."
         ),
-        read_only=True,
+        risk="read",
+        title="Symbol Table Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _status(state),
         feature=None,

@@ -19,9 +19,12 @@ def register(server, client, add_tool, feature=None):
             "already running, since the zlib level is latched at start "
             "and a mid-recording change would silently not apply."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Start Video Capture",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "mode": {
                     "type": "string",
@@ -42,7 +45,10 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="video_capture_stop",
         description="Stop ZMBV video recording.",
-        read_only=False,
+        risk="mutate_guest",
+        title="Stop Video Capture",
+        interact_ok=True,
+        idempotent=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _capture_stop(client),
     )
@@ -62,7 +68,8 @@ def register(server, client, add_tool, feature=None):
             "nothing was actually written (e.g. the emulator was "
             "paused the whole time)."
         ),
-        read_only=True,
+        risk="read",
+        title="Video Capture Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _capture_status(client),
     )
@@ -103,7 +110,8 @@ def register_drive(server, client, add_tool, feature=None):
             "before drive_swap, or to confirm what a multi-disk "
             "installer is currently reading from."
         ),
-        read_only=True,
+        risk="read",
+        title="List Drives",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _drive_list(client),
         feature=feature,
@@ -121,7 +129,8 @@ def register_drive(server, client, add_tool, feature=None):
             "this first if drive_swap keeps returning "
             "outside_whitelist."
         ),
-        read_only=True,
+        risk="read",
+        title="Mount Policy Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _mount_status(client),
         feature=feature,
@@ -141,7 +150,8 @@ def register_drive(server, client, add_tool, feature=None):
             "Non-recursive per root; 'truncated' on a root means it "
             "held more files than the engine's per-root cap."
         ),
-        read_only=True,
+        risk="read",
+        title="List Mountable Images",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _mount_images(client),
         feature=feature,
@@ -165,9 +175,12 @@ def register_drive(server, client, add_tool, feature=None):
             "a 5-second deadline, and does not check that the target "
             "drive letter is currently mounted before replacing it."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Swap Disk Image",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "drive": {
                     "type": "string",
@@ -194,7 +207,9 @@ def register_drive(server, client, add_tool, feature=None):
             "once an install's disk images are all mounted and you "
             "want to guarantee nothing changes the drive layout again."
         ),
-        read_only=False,
+        risk="destructive",
+        title="Lock Mount Configuration",
+        interact_ok=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _mount_lock(client),
         feature=feature,

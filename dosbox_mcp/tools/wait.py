@@ -24,9 +24,11 @@ def register(server, client, add_tool, feature=None):
             "(pattern match, or waits for the program name to change if "
             "pattern is omitted)."
         ),
-        read_only=True,
+        risk="read",
+        title="Wait For Condition",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "for": {
                     "type": "string",
@@ -38,6 +40,8 @@ def register(server, client, add_tool, feature=None):
                 },
                 "timeout_ms": {
                     "type": "integer",
+                    "minimum": 1,
+                    "maximum": 15000,
                     "description": "Max wait, milliseconds (1-15000, default 5000).",
                 },
                 "pattern": {
@@ -70,6 +74,8 @@ def register(server, client, add_tool, feature=None):
                 },
                 "addr": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFFFFFF,
                     "description": "Linear address to poll. Required for 'memory'.",
                 },
                 "width": {

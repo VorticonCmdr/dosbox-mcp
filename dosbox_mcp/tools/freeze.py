@@ -12,12 +12,17 @@ def register(server, client, add_tool, feature=None):
             "Lock a memory address to a value. The value is rewritten every "
             "frame, trainer-style. Width is 1/2/4 bytes, little-endian."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Freeze Memory Value",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "address": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFFFFFF,
                     "description": "Physical memory address to freeze.",
                 },
                 "value": {
@@ -26,6 +31,7 @@ def register(server, client, add_tool, feature=None):
                 },
                 "width": {
                     "type": "integer",
+                    "enum": [1, 2, 4],
                     "description": "Width in bytes: 1, 2, or 4 (default 1).",
                     "default": 1,
                 },
@@ -39,7 +45,8 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="freeze_list",
         description="List all active memory freezes.",
-        read_only=True,
+        risk="read",
+        title="List Freezes",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _freeze_list(client),
         feature=feature,
@@ -51,12 +58,17 @@ def register(server, client, add_tool, feature=None):
             "Remove a freeze. Pass an address to remove one, or omit to "
             "clear all freezes."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Clear Freeze",
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "address": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFFFFFF,
                     "description": "Address to unfreeze. Omit to clear all.",
                 },
             },

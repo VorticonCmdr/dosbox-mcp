@@ -102,6 +102,15 @@ class TestCapabilityModes:
         assert "mem_allocations" in names
         assert "mem_alloc" not in names
         assert "mem_free" not in names
+        # mem_snapshot/mem_diff mutate a shared, engine-side snapshot
+        # registry (allocate/narrow/evict entries) despite reading like
+        # a pure query - an adversarial review of 3.1 caught these
+        # mislabeled risk="read" (readOnlyHint=True), which let a
+        # mutating operation slip past observe mode's one hard
+        # guarantee (never touch the engine). Confirmed full mode still
+        # has them, in test_full_registers_everything below.
+        assert "mem_snapshot" not in names
+        assert "mem_diff" not in names
         assert "drive_list" in names
         assert "mount_status" in names
         assert "mount_images" in names
@@ -142,6 +151,8 @@ class TestCapabilityModes:
         assert "freeze_set" not in names
         assert "port_write" not in names
         assert "cpu_write_register" not in names
+        assert "mem_snapshot" not in names
+        assert "mem_diff" not in names
         assert "debug_step_out" not in names
 
     def test_full_registers_everything(self):
@@ -150,11 +161,127 @@ class TestCapabilityModes:
         assert "port_write" in names
         assert "freeze_set" in names
         assert "debug_map_auto" in names
+        assert "mem_snapshot" in names
+        assert "mem_diff" in names
 
     def test_unknown_mode_rejected(self):
         import pytest
         with pytest.raises(ValueError, match="mode"):
             _build(mode="root")
+
+
+def _list_tools(server):
+    handler = server.request_handlers[types.ListToolsRequest]
+
+    async def go():
+        req = types.ListToolsRequest(method="tools/list")
+        result = await handler(req)
+        return result.root.tools
+
+    return asyncio.run(go())
+
+
+class TestRiskTaxonomy:
+    """3.1: every tool declares a title and a risk class (server.py's
+    RISK_LEVELS), and annotations are derived mechanically from it - a
+    read tool gets only readOnlyHint, everything else gets
+    destructiveHint/idempotentHint set (never left to the spec's
+    default, which is destructiveHint=true for any non-read-only
+    tool)."""
+
+    def test_every_tool_has_a_title_and_consistent_annotations(self):
+        tools = _list_tools(_build(mode="full"))
+        assert tools, "expected at least one tool registered in full mode"
+        for t in tools:
+            assert t.title, f"{t.name}: missing title"
+            a = t.annotations
+            assert a is not None, f"{t.name}: missing annotations"
+            if a.readOnlyHint:
+                assert a.destructiveHint is None, (
+                    f"{t.name}: read-only tool should not set destructiveHint"
+                )
+                assert a.idempotentHint is None, (
+                    f"{t.name}: read-only tool should not set idempotentHint"
+                )
+            else:
+                assert a.destructiveHint is not None, (
+                    f"{t.name}: non-read-only tool must state destructiveHint "
+                    "explicitly - the spec default (true) would call it as "
+                    "dangerous as dosbox_shutdown"
+                )
+                assert a.idempotentHint is not None, (
+                    f"{t.name}: non-read-only tool must state idempotentHint explicitly"
+                )
+
+    def test_destructive_tools_are_flagged(self):
+        tools = {t.name: t for t in _list_tools(_build(mode="full"))}
+        for name in ("dosbox_shutdown", "mount_lock"):
+            assert tools[name].annotations.destructiveHint is True, name
+
+    def test_non_destructive_mutators_are_not_flagged_destructive(self):
+        tools = {t.name: t for t in _list_tools(_build(mode="full"))}
+        for name in ("mem_write", "freeze_set", "input_type", "cpu_write_register"):
+            assert tools[name].annotations.destructiveHint is False, name
+
+    def test_idempotent_hints_match_the_documented_examples(self):
+        tools = {t.name: t for t in _list_tools(_build(mode="full"))}
+        assert tools["mem_write"].annotations.idempotentHint is True
+        assert tools["input_type"].annotations.idempotentHint is False
+
+    def test_mem_snapshot_and_diff_are_not_read_only(self):
+        # An adversarial review of this item caught these mislabeled
+        # risk="read": both mutate a shared, engine-side snapshot
+        # registry (allocate/narrow/evict entries), which let a
+        # mutating operation slip past observe mode's one hard
+        # guarantee. See TestCapabilityModes for the mode-reachability
+        # side of this fix.
+        tools = {t.name: t for t in _list_tools(_build(mode="full"))}
+        assert tools["mem_snapshot"].annotations.readOnlyHint is False
+        assert tools["mem_diff"].annotations.readOnlyHint is False
+
+
+class TestInputSequenceSchema:
+    """Schema-level regressions an adversarial review of 3.1 caught in
+    input_sequence's tightened event schema - validated the same way
+    the MCP SDK itself validates (jsonschema against the real
+    inputSchema), not just by calling the handler function."""
+
+    def _schema(self):
+        tools = {t.name: t for t in _list_tools(_build(mode="full"))}
+        return tools["input_sequence"].inputSchema
+
+    def _validates(self, instance):
+        import jsonschema
+        try:
+            jsonschema.validate(instance=instance, schema=self._schema())
+            return True
+        except jsonschema.ValidationError:
+            return False
+
+    def test_recorded_mouse_move_round_trips(self):
+        # record_stop's response always includes x_abs/y_abs on a
+        # mouse_move event (the engine serializes them unconditionally,
+        # even though only x_rel/y_rel affect dispatch) - feeding that
+        # array straight back into input_sequence must not fail schema
+        # validation.
+        event = {"type": "mouse_move", "t": 10.0, "frame": 1,
+                 "x_rel": 5.0, "y_rel": -2.0, "x_abs": 320.0, "y_abs": 180.0}
+        assert self._validates({"events": [event]})
+
+    def test_event_time_and_frame_have_upper_bounds(self):
+        assert not self._validates(
+            {"events": [{"type": "key", "key": "KBD_a", "delay_ms": 1e12}]})
+        assert not self._validates(
+            {"events": [{"type": "key", "key": "KBD_a", "t": 1e12}]})
+        assert not self._validates(
+            {"events": [{"type": "key", "key": "KBD_a", "frame": 10**12}]})
+        assert self._validates(
+            {"events": [{"type": "key", "key": "KBD_a", "delay_ms": 1000}]})
+
+    def test_recording_name_pattern_matches_the_engine(self):
+        assert not self._validates({"recording": "my recording!"})
+        assert self._validates({"recording": "my-recording_1"})
+        assert not self._validates({"recording": ""})
 
 
 def _call(server, name, args):

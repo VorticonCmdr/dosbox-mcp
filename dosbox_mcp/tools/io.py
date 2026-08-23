@@ -12,16 +12,21 @@ def register(server, client, add_tool, feature=None):
             "Read an x86 I/O port. Width is 1 (byte) or 2 (word). "
             "Use for VGA registers, sound cards, HGC control ports."
         ),
-        read_only=True,
+        risk="read",
+        title="Read I/O Port",
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "port": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "I/O port address (0x0000..0xFFFF).",
                 },
                 "width": {
                     "type": "integer",
+                    "enum": [1, 2],
                     "description": "Width: 1 (byte) or 2 (word). Default 1.",
                     "default": 1,
                 },
@@ -38,12 +43,21 @@ def register(server, client, add_tool, feature=None):
             "Write to an x86 I/O port. Width is 1 (byte) or 2 (word). "
             "For Mode X unchaining, Hercules graphics, hardware config."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Write I/O Port",
+        # Deliberately not marked idempotent: unlike a plain memory or
+        # register set, many I/O ports are index/data pairs or trigger
+        # latches where writing the same value twice has a real,
+        # port-specific side effect (that's the point of a port, not a
+        # memory cell) - see this tool's own Mode X unchaining example.
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "port": {
                     "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
                     "description": "I/O port address (0x0000..0xFFFF).",
                 },
                 "value": {
@@ -52,6 +66,7 @@ def register(server, client, add_tool, feature=None):
                 },
                 "width": {
                     "type": "integer",
+                    "enum": [1, 2],
                     "description": "Width: 1 (byte) or 2 (word). Default 1.",
                     "default": 1,
                 },

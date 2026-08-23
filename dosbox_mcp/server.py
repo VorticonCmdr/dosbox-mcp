@@ -13,38 +13,40 @@ from .connection import Connection, guard
 from .lifecycle import InstanceManager
 from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, ghidra, media, script, symbols, wait
 
-# Groups whose non-read-only tools register under "interact" mode.
-# Everything else non-read-only (memory surgery, port IO, cpu control,
-# debugger, shutdown) needs "full".
-_INTERACT_GROUPS = {"input", "media", "script", "bridge"}
+# The risk taxonomy every tool declares itself under (add_tool's `risk`
+# param), replacing a single read_only boolean:
+#   read          - no side effects anywhere.
+#   mutate_guest  - reaches the connected engine or guest in a normal,
+#                   non-destructive way (memory/CPU/port writes, input
+#                   injection, drive mounts, debugger control, Lua).
+#   mutate_host   - confined to the bridge process's own local
+#                   bookkeeping (e.g. debug_map_set_base's Ghidra
+#                   address-mapping ranges) and never reaches the
+#                   engine or guest at all - always allowed, in every
+#                   mode, unconditionally (see _mode_allows below).
+#   destructive   - an irreversible or high-blast-radius mutation
+#                   (dosbox_shutdown, mount_lock).
+#   lifecycle     - manages the bridge-to-engine connection or process
+#                   itself (bridge_connect/start/stop/...), distinct
+#                   from mutating guest state.
+# Only "read" and "mutate_host" get an unconditional pass; every other
+# tool declares its own interact_ok (default False - full-only) instead
+# of being approximated by which named group it happened to be filed
+# under. This is a deliberate behavior-preserving refactor (3.1): every
+# interact_ok value below reproduces the pre-3.1 group-based table
+# exactly (input/media/script/bridge groups were interact-eligible;
+# everything else wasn't) - see docs/mcp-plan.md item 3.1 for why this
+# item does not also change *which* tools are interact-eligible.
+RISK_LEVELS = ("read", "mutate_guest", "mutate_host", "destructive", "lifecycle")
 
-# Groups whose non-read-only tools register in every mode, including
-# observe: their mutation is confined to the bridge process's own local
-# bookkeeping (e.g. debug_map_set_base's Ghidra address-mapping ranges)
-# and never reaches the connected engine or guest, so the mode's
-# read-only guarantee about the emulator holds regardless. This is an
-# unconditional bypass checked before read_only/mode at all (see
-# _mode_allows below) - a tool that reaches the engine in any way has no
-# business in one of these groups, whatever its read_only flag says.
-# debug_map_auto is deliberately registered under its own separate group
-# ("mapping_auto", server.py's ghidra.register_auto call) rather than
-# here, precisely because it does reach the engine.
-#
-# "symbols" (debug_symbols_load/status, 2.17) belongs here for the same
-# reason as "mapping": the symbol table is bridge-local bookkeeping
-# parsed from pasted Ghidra text, never sent to the engine.
-_LOCAL_ONLY_GROUPS = {"mapping", "symbols"}
 
-
-def _mode_allows(mode: str, read_only: bool, group: str) -> bool:
-    if group in _LOCAL_ONLY_GROUPS:
+def _mode_allows(mode: str, risk: str, interact_ok: bool) -> bool:
+    if risk in ("read", "mutate_host"):
         return True
     if mode == "full":
         return True
-    if read_only:
-        return True
     if mode == "interact":
-        return group in _INTERACT_GROUPS
+        return interact_ok
     return False
 
 
@@ -72,18 +74,37 @@ def build_server(conn, mode: str = "full", manager=None):
     server = Server("dosbox-mcp")
     registry = {}
 
-    def add_tool(name, description, schema, handler, read_only=False,
-                 feature=None, group="session", needs_connection=True):
-        if not _mode_allows(mode, read_only, group):
+    def add_tool(name, description, schema, handler, risk, title,
+                 interact_ok=False, idempotent=False, feature=None,
+                 needs_connection=True):
+        assert risk in RISK_LEVELS, f"{name}: unknown risk {risk!r}"
+        if not _mode_allows(mode, risk, interact_ok):
             return
         # Bridge-internal tools skip the connection guard: most of them
         # must work while disconnected - that is their point.
         wrapped = (guard(conn, handler, feature=feature, tool_name=name)
                    if needs_connection else handler)
-        annotations = types.ToolAnnotations(readOnlyHint=read_only)
+        if risk == "read":
+            # destructiveHint/idempotentHint are spec-defined to be
+            # meaningful only when readOnlyHint is false - leave them
+            # unset here rather than force a value that means nothing.
+            annotations = types.ToolAnnotations(readOnlyHint=True)
+        else:
+            annotations = types.ToolAnnotations(
+                readOnlyHint=False,
+                # The spec defaults destructiveHint to true whenever
+                # readOnlyHint is false, so every non-destructive
+                # mutator needs this stated explicitly, not left to
+                # default - a silent default would call mem_write and
+                # input_type "destructive" right alongside
+                # dosbox_shutdown.
+                destructiveHint=(risk == "destructive"),
+                idempotentHint=idempotent,
+            )
         registry[name] = (
             types.Tool(
                 name=name,
+                title=title,
                 description=description,
                 inputSchema=schema,
                 annotations=annotations,
@@ -91,58 +112,48 @@ def build_server(conn, mode: str = "full", manager=None):
             wrapped,
         )
 
-    def add_tool_for(group):
-        def add(name, description, schema, handler, read_only=False,
-                feature=None, needs_connection=True):
-            add_tool(name, description, schema, handler,
-                     read_only=read_only, feature=feature, group=group,
-                     needs_connection=needs_connection)
-        return add
-
     def get_tools():
         return [(name, tool.description.split(". ")[0].rstrip(".") + ".")
                 for name, (tool, _) in registry.items()]
 
-    for mod, group in ((session, "session"), (screen, "screen"),
-                       (media, "media"), (script, "script"),
-                       (wait, "wait")):
-        mod.register(server, conn, add_tool_for(group))
-    media.register_drive(server, conn, add_tool_for("media"), feature="drive")
+    for mod in (session, screen, media, script, wait):
+        mod.register(server, conn, add_tool)
+    media.register_drive(server, conn, add_tool, feature="drive")
 
-    input_tools.register(server, conn, add_tool_for("input"), feature="input")
+    input_tools.register(server, conn, add_tool, feature="input")
     # debug_map_set_base/to_live/to_ghidra/status are pure client-side
     # arithmetic - no engine call, so feature=None (they used to be
     # gated behind feature="debugger", which made all four permanently
     # refuse on a stock non-debugger build despite three of them never
-    # touching the engine at all) and group="mapping" is in
-    # _LOCAL_ONLY_GROUPS (above), so set_base's own local-state mutation
-    # survives observe mode too. debug_map_auto is registered separately,
-    # under its own group, deliberately NOT in _LOCAL_ONLY_GROUPS: it
-    # reads live engine memory (mem_scan, dos_memory_map) as part of
-    # deriving what to persist, so it stays gated to full mode like any
-    # other engine-reaching mutation - see ghidra.register_auto's own
+    # touching the engine at all) and risk="mutate_host"/"read" mean
+    # set_base's own local-state mutation survives observe mode too
+    # (see RISK_LEVELS above). debug_map_auto is registered separately
+    # (register_auto) and classified risk="mutate_guest" instead, even
+    # though its own write is purely local too: it reads live engine
+    # memory (mem_scan, dos_memory_map) as part of deriving what to
+    # persist, so it stays gated to full mode like any other
+    # engine-reaching operation - see ghidra.register_auto's own
     # docstring.
     #
     # Registered before memory/debug so annotate_fn (2.17) can close
     # over both states in time to be handed to their register() calls.
-    ghidra_state = ghidra.register(server, conn, add_tool_for("mapping"))
-    ghidra.register_auto(server, conn, add_tool_for("mapping_auto"),
-                         ghidra_state, feature="memory")
-    symbol_state = symbols.register(server, conn, add_tool_for("symbols"))
+    ghidra_state = ghidra.register(server, conn, add_tool)
+    ghidra.register_auto(server, conn, add_tool, ghidra_state, feature="memory")
+    symbol_state = symbols.register(server, conn, add_tool)
     annotate_fn = symbols.make_annotator(ghidra_state, symbol_state)
 
-    memory.register(server, conn, add_tool_for("memory"), feature="memory")
-    memory.register_allocation(server, conn, add_tool_for("memory"), feature="memory")
-    memory.register_search(server, conn, add_tool_for("memory"), feature="memory",
+    memory.register(server, conn, add_tool, feature="memory")
+    memory.register_allocation(server, conn, add_tool, feature="memory")
+    memory.register_search(server, conn, add_tool, feature="memory",
                            annotate=annotate_fn)
-    memory.register_snapshot(server, conn, add_tool_for("memory"), feature="memory")
-    freeze.register(server, conn, add_tool_for("freeze"), feature="freeze")
-    io.register(server, conn, add_tool_for("port_io"), feature="port_io")
-    cpu.register(server, conn, add_tool_for("cpu"), feature="cpu_control")
-    cpu.register_state(server, conn, add_tool_for("cpu"), feature="cpu_registers")
-    debug.register(server, conn, add_tool_for("debug"), feature="debugger",
+    memory.register_snapshot(server, conn, add_tool, feature="memory")
+    freeze.register(server, conn, add_tool, feature="freeze")
+    io.register(server, conn, add_tool, feature="port_io")
+    cpu.register(server, conn, add_tool, feature="cpu_control")
+    cpu.register_state(server, conn, add_tool, feature="cpu_registers")
+    debug.register(server, conn, add_tool, feature="debugger",
                    annotate=annotate_fn)
-    bridge.register(server, conn, add_tool_for("bridge"),
+    bridge.register(server, conn, add_tool,
                     manager=manager, mode=mode, get_tools=get_tools)
 
     @server.list_tools()

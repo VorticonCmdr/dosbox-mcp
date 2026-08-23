@@ -152,7 +152,8 @@ def register(server, conn, add_tool, manager, mode, get_tools):
     add_tool(
         name="bridge_version",
         description="Bridge version and the protocol level it implements.",
-        read_only=True,
+        risk="read",
+        title="Bridge Version",
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _version(args),
@@ -165,7 +166,8 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "protocol, enabled features, capability mode, managed "
             "instance, token presence (never the value)."
         ),
-        read_only=True,
+        risk="read",
+        title="Bridge Status",
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _status(conn, manager, mode),
@@ -177,7 +179,8 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "One-call orientation: version, connection state, and every "
             "available tool with a one-line description."
         ),
-        read_only=True,
+        risk="read",
+        title="Bridge Help",
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _help(conn, manager, mode, get_tools),
@@ -190,7 +193,10 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "token, probes the API, negotiates the protocol version. "
             "Reports a precise reason when it cannot."
         ),
-        read_only=False,
+        risk="lifecycle",
+        title="Connect to Instance",
+        interact_ok=True,
+        idempotent=True,
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _connect(conn, manager, mode),
@@ -199,7 +205,10 @@ def register(server, conn, add_tool, manager, mode, get_tools):
     add_tool(
         name="bridge_disconnect",
         description="Detach from the instance; it keeps running.",
-        read_only=False,
+        risk="lifecycle",
+        title="Disconnect",
+        interact_ok=True,
+        idempotent=True,
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _disconnect(conn),
@@ -212,7 +221,9 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "file (with an isolated config dir) and attach to it. "
             "Refuses while an instance is already managed."
         ),
-        read_only=False,
+        risk="lifecycle",
+        title="Start Instance",
+        interact_ok=True,
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _start(conn, manager),
@@ -224,7 +235,9 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "Stop the instance this bridge spawned. Never stops an "
             "instance it merely attached to."
         ),
-        read_only=False,
+        risk="lifecycle",
+        title="Stop Instance",
+        interact_ok=True,
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _stop(conn, manager),
@@ -236,12 +249,14 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "Tail of the spawned instance's output (untrusted machine "
             "output). Only covers an instance this bridge started."
         ),
-        read_only=True,
+        risk="read",
+        title="Instance Logs",
         needs_connection=False,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
-                "n": {"type": "integer",
+                "n": {"type": "integer", "minimum": 1,
                       "description": "Number of lines from the end (default all buffered)."},
             },
         },
@@ -255,12 +270,16 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "The binary path and the capability mode are human-edited "
             "only and are rejected here by design."
         ),
-        read_only=False,
+        risk="lifecycle",
+        title="Configure Bridge",
+        interact_ok=True,
+        idempotent=True,
         needs_connection=False,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
-                "port": {"type": "integer",
+                "port": {"type": "integer", "minimum": 1, "maximum": 0xFFFF,
                          "description": "Webserver port on 127.0.0.1."},
                 "headless": {"type": "boolean",
                              "description": "Spawn without a window."},
@@ -277,7 +296,8 @@ def register(server, conn, add_tool, manager, mode, get_tools):
             "Digest of the instance's OpenAPI surface: route counts per "
             "group and routes unknown to the negotiated protocol."
         ),
-        read_only=True,
+        risk="read",
+        title="OpenAPI Digest",
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _swagger(conn),

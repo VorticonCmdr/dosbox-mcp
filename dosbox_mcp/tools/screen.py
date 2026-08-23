@@ -13,7 +13,8 @@ def register(server, client, add_tool, feature=None):
             "Read the DOS text-mode screen buffer as a string. "
             "Works only in text modes (CGA/EGA/VGA/Hercules text)."
         ),
-        read_only=True,
+        risk="read",
+        title="Read Screen Text",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _screen_text(client),
     )
@@ -23,7 +24,8 @@ def register(server, client, add_tool, feature=None):
         description=(
             "Capture the current screen as a PNG image. Works in all video modes."
         ),
-        read_only=True,
+        risk="read",
+        title="Capture Screen",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _screen_capture(client),
     )
@@ -31,7 +33,8 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="screen_info",
         description="Frame metadata: resolution, pixel format, palette status.",
-        read_only=True,
+        risk="read",
+        title="Screen Info",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _screen_info(client),
     )

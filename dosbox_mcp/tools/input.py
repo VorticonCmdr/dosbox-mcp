@@ -5,6 +5,152 @@
 import json
 from urllib.parse import quote, urlencode
 
+# Mirrors the engine's own constants (src/webserver/input.h), surfaced
+# at runtime via capabilities.input.limits - duplicated here because
+# schemas are built once at server startup, before any connection (and
+# possibly with none ever made - see bridge_start), so there is no live
+# capabilities response to read from at registration time. Keep in sync
+# by hand; drift would show up as the bridge accepting/rejecting a
+# request the engine disagrees with.
+MAX_TYPED_TEXT_CHARS = 4096
+MIN_TYPING_CPS = 0.1
+MAX_TYPING_CPS = 1000
+MAX_INPUT_EVENTS = 32000
+MAX_RECORDING_NAME_LENGTH = 64
+MAX_EVENT_TIME_MS = 24 * 60 * 60 * 1000  # 24 hours
+MAX_EVENT_FRAME = 1_000_000_000
+# RecordingStore::IsValidName's exact rule (also enforced server-side,
+# this is belt-and-suspenders so a bad name never round-trips at all).
+_RECORDING_NAME_PATTERN = "^[A-Za-z0-9_-]+$"
+
+# One oneOf branch per event type, matching the engine's own per-type
+# field allow-list exactly (src/webserver/input.cpp's allowed_fields) -
+# an unknown field, or a field that belongs to a different event type
+# (the classic x_rel/x typo), fails schema validation before the
+# request goes out, instead of silently dispatching a zero-motion event
+# the engine would otherwise accept-and-ignore.
+_COMMON_EVENT_PROPS = {
+    "t": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": MAX_EVENT_TIME_MS,
+        "description": (
+            "Absolute position on the sequence timeline in ms "
+            "(recording format). Mutually exclusive with 'delay_ms'."
+        ),
+    },
+    "delay_ms": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": MAX_EVENT_TIME_MS,
+        "description": (
+            "Wait this many ms after the previous event before firing "
+            "(relative timing; the natural choice for hand-written "
+            "sequences). Mutually exclusive with 't'."
+        ),
+    },
+    "frame": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": MAX_EVENT_FRAME,
+        "description": (
+            "Fire on this rendered frame number instead of by elapsed "
+            "time. A 'frame' field on any event in the chain makes the "
+            "whole chain dispatch through the frame-timed engine "
+            "instead of the wall-clock-timed one - see this tool's own "
+            "description."
+        ),
+    },
+}
+
+_TYPE_SPECIFIC_PROPS = {
+    "key": {
+        "key": {
+            "type": "string",
+            "description": "KBD_* key name, e.g. KBD_enter, KBD_up, KBD_kp8.",
+        },
+        "pressed": {
+            "type": "boolean",
+            "description": "Press (true) or release (false). Default true.",
+        },
+    },
+    "mouse_move": {
+        "x_rel": {
+            "type": "number",
+            "description": "Horizontal mouse delta in pixels, positive is right.",
+        },
+        "y_rel": {
+            "type": "number",
+            "description": "Vertical mouse delta in pixels, positive is down.",
+        },
+        # The engine accepts and round-trips these (a record_stop
+        # response's mouse_move events always carry them) but ignores
+        # them for actual dispatch - only x_rel/y_rel move the cursor.
+        # Accepted here so feeding a recorded 'events' array straight
+        # back into this tool doesn't fail schema validation; not
+        # documented as a way to position the cursor (see this tool's
+        # own "no absolute positioning" note).
+        "x_abs": {
+            "type": "number",
+            "description": "Recorded absolute X - accepted, ignored for dispatch.",
+        },
+        "y_abs": {
+            "type": "number",
+            "description": "Recorded absolute Y - accepted, ignored for dispatch.",
+        },
+    },
+    "mouse_button": {
+        "button": {
+            "type": "string",
+            "enum": ["left", "right", "middle"],
+            "description": "Mouse button.",
+        },
+        "pressed": {
+            "type": "boolean",
+            "description": "Press (true) or release (false). Default true.",
+        },
+    },
+    "mouse_wheel": {
+        "delta": {
+            "type": "number",
+            "description": "Wheel movement.",
+        },
+    },
+}
+
+
+def _event_branch(type_name, *, type_required):
+    return {
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": [type_name],
+                "description": (
+                    "Event kind. Defaults to 'key' if omitted."
+                    if type_name == "key" else "Event kind."
+                ),
+            },
+            **_COMMON_EVENT_PROPS,
+            **_TYPE_SPECIFIC_PROPS[type_name],
+        },
+        "additionalProperties": False,
+        **({"required": ["type"]} if type_required else {}),
+    }
+
+
+# 'key' is the only type omission defaults to (matching the engine's
+# jev.value("type", "key")), so it's the only branch where 'type' isn't
+# required - the other three must name themselves explicitly, which is
+# also what stops an event from accidentally satisfying more than one
+# branch (oneOf requires exactly one match).
+_EVENT_ONE_OF = [
+    _event_branch("key", type_required=False),
+    _event_branch("mouse_move", type_required=True),
+    _event_branch("mouse_button", type_required=True),
+    _event_branch("mouse_wheel", type_required=True),
+]
+
 
 def register(server, client, add_tool, feature=None):
     add_tool(
@@ -14,16 +160,22 @@ def register(server, client, add_tool, feature=None):
             "with pacing so the 8-slot i8042 buffer never overflows. "
             "Supports printable ASCII and common symbols (US layout)."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Type Text",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "Text to type (max 4096 chars).",
+                    "maxLength": MAX_TYPED_TEXT_CHARS,
+                    "description": f"Text to type (max {MAX_TYPED_TEXT_CHARS} chars).",
                 },
                 "cps": {
                     "type": "number",
+                    "minimum": MIN_TYPING_CPS,
+                    "maximum": MAX_TYPING_CPS,
                     "description": "Characters per second (default 30).",
                 },
             },
@@ -40,9 +192,12 @@ def register(server, client, add_tool, feature=None):
             "Use for special keys (F1-F12, arrows, Escape, etc) that "
             "input_type cannot produce."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Press Key",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "key": {
                     "type": "string",
@@ -83,12 +238,17 @@ def register(server, client, add_tool, feature=None):
             "press event followed by a release event. Unknown fields are "
             "rejected with an error naming the allowed ones."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Inject Input Sequence",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "recording": {
                     "type": "string",
+                    "maxLength": MAX_RECORDING_NAME_LENGTH,
+                    "pattern": _RECORDING_NAME_PATTERN,
                     "description": (
                         "Name of a stored recording to replay instead "
                         "of 'events' - see recordings_list."
@@ -96,82 +256,11 @@ def register(server, client, add_tool, feature=None):
                 },
                 "events": {
                     "type": "array",
+                    "maxItems": MAX_INPUT_EVENTS,
                     "description": (
                         "Input events, dispatched in order on one timeline."
                     ),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "type": {
-                                "type": "string",
-                                "enum": [
-                                    "key",
-                                    "mouse_move",
-                                    "mouse_button",
-                                    "mouse_wheel",
-                                ],
-                                "description": "Event kind (default: key).",
-                            },
-                            "delay_ms": {
-                                "type": "number",
-                                "description": (
-                                    "Wait this many ms after the previous "
-                                    "event before firing (relative timing; "
-                                    "the natural choice for hand-written "
-                                    "sequences). Mutually exclusive with 't'."
-                                ),
-                            },
-                            "t": {
-                                "type": "number",
-                                "description": (
-                                    "Absolute position on the sequence "
-                                    "timeline in ms (recording format). "
-                                    "Mutually exclusive with 'delay_ms'."
-                                ),
-                            },
-                            "key": {
-                                "type": "string",
-                                "description": (
-                                    "KBD_* key name (key events), "
-                                    "e.g. KBD_enter, KBD_up, KBD_kp8."
-                                ),
-                            },
-                            "pressed": {
-                                "type": "boolean",
-                                "description": (
-                                    "Press (true) or release (false), for "
-                                    "key and mouse_button events."
-                                ),
-                            },
-                            "x_rel": {
-                                "type": "number",
-                                "description": (
-                                    "Horizontal mouse delta in pixels, "
-                                    "positive is right (mouse_move events)."
-                                ),
-                            },
-                            "y_rel": {
-                                "type": "number",
-                                "description": (
-                                    "Vertical mouse delta in pixels, "
-                                    "positive is down (mouse_move events)."
-                                ),
-                            },
-                            "button": {
-                                "type": "string",
-                                "enum": ["left", "right", "middle"],
-                                "description": (
-                                    "Mouse button (mouse_button events)."
-                                ),
-                            },
-                            "delta": {
-                                "type": "number",
-                                "description": (
-                                    "Wheel movement (mouse_wheel events)."
-                                ),
-                            },
-                        },
-                    },
+                    "items": {"oneOf": _EVENT_ONE_OF},
                 },
             },
         },
@@ -191,7 +280,8 @@ def register(server, client, add_tool, feature=None):
             "space) - checking status right after is the normal "
             "sequence, not an error."
         ),
-        read_only=True,
+        risk="read",
+        title="Replay Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _replay_status(client),
         feature=feature,
@@ -206,7 +296,10 @@ def register(server, client, add_tool, feature=None):
             "cancelled:false rather than erroring). Use this instead "
             "of waiting out a sequence armed by mistake."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Cancel Replay",
+        interact_ok=True,
+        idempotent=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _replay_cancel(client),
         feature=feature,
@@ -223,7 +316,9 @@ def register(server, client, add_tool, feature=None):
             "input_sequence/input_key/input_type while recording is "
             "NOT captured (a replay never re-records itself)."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Start Recording Input",
+        interact_ok=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _record_start(client),
         feature=feature,
@@ -232,7 +327,9 @@ def register(server, client, add_tool, feature=None):
     add_tool(
         name="record_pause",
         description="Toggle pause on the running recording. Refused with 409 if nothing is recording.",
-        read_only=False,
+        risk="mutate_guest",
+        title="Pause/Resume Recording",
+        interact_ok=True,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _record_pause(client),
         feature=feature,
@@ -255,12 +352,17 @@ def register(server, client, add_tool, feature=None):
             "list. The response's 'truncated' is true if the recording "
             "hit the 32000-event cap and lost the tail."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Stop Recording Input",
+        interact_ok=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "name": {
                     "type": "string",
+                    "maxLength": MAX_RECORDING_NAME_LENGTH,
+                    "pattern": _RECORDING_NAME_PATTERN,
                     "description": "Save the recording under this name.",
                 },
                 "include_events": {
@@ -280,7 +382,8 @@ def register(server, client, add_tool, feature=None):
             "duration so far, and whether it has hit the event cap "
             "(truncated)."
         ),
-        read_only=True,
+        risk="read",
+        title="Recording Status",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _record_status(client),
         feature=feature,
@@ -295,7 +398,8 @@ def register(server, client, add_tool, feature=None):
             "restart. Use input_sequence {\"recording\": \"<name>\"} to "
             "replay one."
         ),
-        read_only=True,
+        risk="read",
+        title="List Recordings",
         schema={"type": "object", "properties": {}},
         handler=lambda args: _recordings_list(client),
         feature=feature,
@@ -307,11 +411,19 @@ def register(server, client, add_tool, feature=None):
             "Delete a stored recording by name. 404 if no recording "
             "has that name. Frees a slot in the store (max 20)."
         ),
-        read_only=False,
+        risk="mutate_guest",
+        title="Delete Recording",
+        interact_ok=True,
+        idempotent=True,
         schema={
             "type": "object",
+            "additionalProperties": False,
             "properties": {
-                "name": {"type": "string"},
+                "name": {
+                    "type": "string",
+                    "maxLength": MAX_RECORDING_NAME_LENGTH,
+                    "pattern": _RECORDING_NAME_PATTERN,
+                },
             },
             "required": ["name"],
         },
