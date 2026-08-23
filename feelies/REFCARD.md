@@ -52,6 +52,11 @@ These work whether or not an engine is connected.
   `{"events": [{"key": "KBD_up"}, {"key": "KBD_enter", "delay_ms": 100}]}`
 - **input_type** - type a string, paced so the keyboard buffer keeps
   up. `{"text": "dir *.exe"}`
+- **replay_status** (read-only) - progress of the current or most
+  recently finished input_sequence chain: active, engine, total,
+  dispatched, remaining, elapsed_ms, drift_ms, current_frame. `{}`
+- **replay_cancel** - stop the running input_sequence chain early.
+  `{}`
 
 ## Memory (feature: memory)
 

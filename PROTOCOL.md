@@ -116,7 +116,7 @@ verify the advertised contract against it.
 | session | `status`, `program/state`, `dosbox/info`, `dosbox/shutdown` | machine and program state; shutdown is irreversible |
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control; status reports path, frames, elapsed time and bytes written |
-| input | `input/sequence`, `input/type` | named-key sequences; paced string typing (feature: input) |
+| input | `input/sequence`, `input/type`, `input/replay/status` GET, `input/replay` DELETE | named-key sequences; paced string typing; replay progress and cancellation (feature: input) |
 | memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff`, `memory/allocate` POST, `memory/free` POST, `memory/allocations` GET | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
@@ -285,6 +285,34 @@ Semantics that are part of the contract, not just the schemas:
 - `POST /mount/lock` is a one-way latch for the life of the process:
   once locked, every further mount attempt is refused, `drive/swap`
   and the guest's own MOUNT/IMGMOUNT/BOOT alike. There is no unlock.
+- `POST /input/sequence` returns as soon as the chain is armed
+  (`events_scheduled`), before any of it has dispatched. There are two
+  independent dispatch engines - PIC-timed (`t`/`delay_ms`) and
+  frame-timed (any event carrying a `frame` field) - each with its own
+  409 "already in progress": one engine being busy never blocks
+  starting a chain on the other, so two independent POSTs (one of each
+  kind) can in principle run concurrently.
+  `GET /input/replay/status` returns
+  `{active, engine, total, dispatched, remaining, elapsed_ms, drift_ms,
+  current_frame}`. `engine` is `"pic"`, `"frame"`, `"mixed"` (both
+  chains happened to be active at once - the rare case above), or
+  `"none"`. A finished, cancelled, or self-aborted chain keeps
+  reporting its final total/dispatched/elapsed_ms/drift_ms rather than
+  zeroing them out - checking status right after a replay ends is the
+  normal sequence, not a race to catch it. `elapsed_ms` is wall-clock
+  time since the chain was armed by the POST call - it is not zero at
+  first dispatch, and includes any lead-in wait before the first
+  event's own `t`/`delay_ms`/`frame` position is reached (a first event
+  at `"t": 5000` shows `elapsed_ms` already near 5000 the moment it
+  actually fires) - and is frozen at its final value once the chain
+  stops rather than climbing with wall-clock time afterward. A chain that gets stuck
+  waiting for keyboard buffer space (the guest never reads its input)
+  self-aborts after `capabilities.input.limits.replay_stall_threshold_ms`
+  of no progress, rather than wedging forever and leaving every later
+  `input/sequence` call refused with 409 - `dispatched` staying below
+  `total` after a run is the tell.
+  `DELETE /input/replay` cancels whichever chain(s) are active; safe to
+  call when nothing is running (`{cancelled: false}`, not an error).
 - Validation lives engine-side. The engine is the trust boundary;
   a client talking HTTP directly must be subject to exactly the same
   limits as one going through a bridge.
@@ -472,3 +500,16 @@ changed and the version it produces.
   in particular close a real gap: an agent could tell a recording was
   active but not where it landed on disk or whether it actually wrote
   any frames. All under the existing `capture` feature flag.
+- **1.9.0 (draft)** - adds `GET /input/replay/status` and
+  `DELETE /input/replay` under the existing `input` feature flag.
+  `POST /input/sequence`'s 400 `error_code`-less error responses are
+  unchanged, but its own description now documents the 409 it could
+  already return (a chain of the same kind already running) and the
+  new status/cancel routes. A genuine engine-side behavior change, not
+  just new routes: a replay chain that gets stuck waiting for keyboard
+  buffer space (the guest never reads its input) previously wedged
+  forever, refusing every later `input/sequence` call with 409
+  indefinitely; it now self-aborts after
+  `capabilities.input.limits.replay_stall_threshold_ms` (5000 by
+  default) of no dispatch progress, logging a warning and leaving the
+  engine free to accept a new chain.

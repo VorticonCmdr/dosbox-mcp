@@ -63,7 +63,13 @@ def register(server, client, add_tool, feature=None):
         name="input_sequence",
         description=(
             "Inject a timed sequence of key, mouse, and wheel events. "
-            "For complex input patterns or recorded replays. "
+            "For complex input patterns or recorded replays. Returns "
+            "immediately once the chain is armed (events_scheduled), "
+            "before any of it has actually dispatched - use "
+            "replay_status to track progress and replay_cancel to stop "
+            "it early. Refused with a 409 if a chain of the same kind "
+            "(timed via 't'/'delay_ms', or frame-relative via a 'frame' "
+            "field on any event) is already running. "
             "Mouse movement is RELATIVE (x_rel/y_rel deltas from the "
             "current cursor position); there is no absolute positioning. "
             "To reach a known position, sweep past a screen corner first "
@@ -162,6 +168,39 @@ def register(server, client, add_tool, feature=None):
         feature=feature,
     )
 
+    add_tool(
+        name="replay_status",
+        description=(
+            "Progress of the current (or most recently finished) "
+            "input_sequence chain: active, engine (pic/frame/mixed/"
+            "none), total, dispatched, remaining, elapsed_ms, "
+            "drift_ms, current_frame. Keeps reporting the finished "
+            "run's numbers after it stops, is cancelled, or "
+            "self-aborts (stuck too long waiting for keyboard buffer "
+            "space) - checking status right after is the normal "
+            "sequence, not an error."
+        ),
+        read_only=True,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _replay_status(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="replay_cancel",
+        description=(
+            "Cancel the running input_sequence chain, if any - drains "
+            "it immediately instead of letting it run to completion. "
+            "Safe to call when nothing is running (returns "
+            "cancelled:false rather than erroring). Use this instead "
+            "of waiting out a sequence armed by mistake."
+        ),
+        read_only=False,
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _replay_cancel(client),
+        feature=feature,
+    )
+
 
 def _input_type(client, args):
     import mcp.types as types
@@ -185,4 +224,16 @@ def _input_key(client, args):
 def _input_sequence(client, args):
     import mcp.types as types
     result = client.post("/api/v1/input/sequence", json={"events": args["events"]})
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _replay_status(client):
+    import mcp.types as types
+    result = client.get("/api/v1/input/replay/status")
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _replay_cancel(client):
+    import mcp.types as types
+    result = client.delete("/api/v1/input/replay")
     return [types.TextContent(type="text", text=json.dumps(result))]
