@@ -5,13 +5,20 @@
 import json
 
 
-def register(server, client, add_tool, feature=None):
+def register(server, client, add_tool, feature=None, annotate=None):
+    """annotate, when given, is symbols.make_annotator's bound
+    (live_segment, live_offset) -> symbol-or-None function (2.17) -
+    every route that carries a CS:EIP-shaped position or a disassembled
+    address gets a best-effort 'symbol'/'target_symbol' field alongside
+    it. None (the default) skips annotation entirely, same as an
+    annotate that never resolves anything - callers with no symbol
+    table loaded pay only the one 'if annotate' check per response."""
     add_tool(
         name="debug_status",
         description="Debugger state: whether execution is currently paused.",
         read_only=True,
         schema={"type": "object", "properties": {}},
-        handler=lambda args: _status(client),
+        handler=lambda args: _status(client, annotate),
         feature=feature,
     )
 
@@ -20,7 +27,7 @@ def register(server, client, add_tool, feature=None):
         description="Pause emulation at the current instruction.",
         read_only=False,
         schema={"type": "object", "properties": {}},
-        handler=lambda args: _pause(client),
+        handler=lambda args: _pause(client, annotate),
         feature=feature,
     )
 
@@ -57,7 +64,7 @@ def register(server, client, add_tool, feature=None):
                 },
             },
         },
-        handler=lambda args: _step(client, args),
+        handler=lambda args: _step(client, args, annotate),
         feature=feature,
     )
 
@@ -78,7 +85,7 @@ def register(server, client, add_tool, feature=None):
         ),
         read_only=False,
         schema={"type": "object", "properties": {}},
-        handler=lambda args: _step_over(client),
+        handler=lambda args: _step_over(client, annotate),
         feature=feature,
     )
 
@@ -145,7 +152,15 @@ def register(server, client, add_tool, feature=None):
             "debugger hasn't paused even once since the engine started); "
             "code_bytes is 16 base64 bytes at CS:EIP. satisfied is false "
             "on a genuine timeout - stop_id and the rest still describe "
-            "the latest known stop."
+            "the latest known stop. Adds 'symbol' (nearest known name at "
+            "or before CS:EIP, see debug_symbols_load) when one's in "
+            "range - omitted otherwise, including whenever no symbols "
+            "are loaded or reason is 'never_stopped'. For an "
+            "execute/memory breakpoint hit, 'breakpoint' also gets its "
+            "own 'symbol' for the watched/armed location, which is "
+            "usually a different address than CS:EIP - the code that "
+            "changed a watched byte can be anywhere, not just at the "
+            "watchpoint itself."
         ),
         read_only=True,
         schema={
@@ -161,7 +176,7 @@ def register(server, client, add_tool, feature=None):
                 },
             },
         },
-        handler=lambda args: _wait(client, args),
+        handler=lambda args: _wait(client, args, annotate),
         feature=feature,
     )
 
@@ -340,7 +355,10 @@ def register(server, client, add_tool, feature=None):
             "correctly but there's no separate address to read. 'bytes' is "
             "the raw instruction bytes, base64. Stops early (truncated:true) "
             "rather than decode an instruction that would run past the end "
-            "of emulated memory."
+            "of emulated memory. Each instruction gets a 'symbol' field "
+            "(and 'target_symbol' when 'target' is set) when a loaded "
+            "symbol covers that address (debug_symbols_load) - omitted "
+            "otherwise."
         ),
         read_only=True,
         schema={
@@ -361,7 +379,7 @@ def register(server, client, add_tool, feature=None):
             },
             "required": ["segment", "offset", "count"],
         },
-        handler=lambda args: _disassemble(client, args),
+        handler=lambda args: _disassemble(client, args, annotate),
         feature="disassemble",
     )
 
@@ -386,7 +404,9 @@ def register(server, client, add_tool, feature=None):
             "uncertainty). Treat 'low' frames' segment/offset as a guess. "
             "'stopped_reason' says why the walk ended: 'max_frames' means "
             "it hit max_frames and might continue further; anything else "
-            "means the chain itself ended or looked invalid there."
+            "means the chain itself ended or looked invalid there. Each "
+            "frame gets a 'symbol' field when a loaded symbol covers its "
+            "segment:offset (debug_symbols_load) - omitted otherwise."
         ),
         read_only=True,
         schema={
@@ -398,20 +418,52 @@ def register(server, client, add_tool, feature=None):
                 },
             },
         },
-        handler=lambda args: _backtrace(client, args),
+        handler=lambda args: _backtrace(client, args, annotate),
         feature="backtrace",
     )
 
 
-def _status(client):
+def _annotate_stop_dict(stop, annotate):
+    """Mutates stop (a DebugStopToJson-shaped dict, or the top-level
+    dict from debug/wait where those same fields are merged in flat) in
+    place, adding 'symbol' for the CS:EIP position and, for an
+    execute/memory breakpoint hit, a 'symbol' on the breakpoint
+    sub-object for the watched/armed location itself - a memory
+    watchpoint's interesting address is where the watch is armed, not
+    wherever CS:EIP happened to be when the watched byte changed. No-op
+    on None/empty (a route that carries no stop this call, e.g.
+    debug_step_over's plant-and-resume path), on the debugger's own
+    "never_stopped" placeholder record (registers are present but are
+    all-zero filler, not a real position - annotating those would claim
+    a symbol for a stop that never actually happened), or when annotate
+    itself has nothing loaded to resolve against."""
+    if not stop or stop.get("reason") == "never_stopped":
+        return
+    regs = stop.get("registers")
+    if regs:
+        symbol = annotate(regs["cs"], regs["eip"])
+        if symbol is not None:
+            stop["symbol"] = symbol
+    bp = stop.get("breakpoint")
+    if bp and bp.get("type") in ("execute", "memory"):
+        bp_symbol = annotate(bp["segment"], bp["offset"])
+        if bp_symbol is not None:
+            bp["symbol"] = bp_symbol
+
+
+def _status(client, annotate=None):
     import mcp.types as types
     result = client.get("/api/v1/debug/status")
+    if annotate:
+        _annotate_stop_dict(result.get("stop"), annotate)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _pause(client):
+def _pause(client, annotate=None):
     import mcp.types as types
     result = client.post("/api/v1/debug/pause")
+    if annotate:
+        _annotate_stop_dict(result.get("stop"), annotate)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
@@ -421,15 +473,19 @@ def _continue(client):
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _step(client, args):
+def _step(client, args, annotate=None):
     import mcp.types as types
     result = client.post("/api/v1/debug/step", json=args)
+    if annotate:
+        _annotate_stop_dict(result.get("stop"), annotate)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _step_over(client):
+def _step_over(client, annotate=None):
     import mcp.types as types
     result = client.post("/api/v1/debug/step_over")
+    if annotate:
+        _annotate_stop_dict(result.get("stop"), annotate)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
@@ -445,13 +501,19 @@ def _step_out(client):
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _wait(client, args):
+def _wait(client, args, annotate=None):
     import mcp.types as types
     timeout_ms = args.get("timeout_ms", 5000)
     # httpx's timeout needs slack over the server-side deadline so the
     # engine's own timeout fires first, not the transport's.
     result = client.get("/api/v1/debug/wait", params=args,
                         timeout=(timeout_ms / 1000.0) + 5.0)
+    # debug/wait's stop fields are merged flat into the top-level
+    # object (unlike status/pause/step's nested "stop"), but
+    # _annotate_stop_dict only needs a dict with a "registers" key -
+    # result itself qualifies as-is.
+    if annotate:
+        _annotate_stop_dict(result, annotate)
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
@@ -481,15 +543,51 @@ def _breakpoint_delete(client, args):
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
-def _disassemble(client, args):
+def _annotate_disassembly(result, annotate):
+    # inst['offset']/inst['target'] are physical addresses (segment*16 +
+    # a running byte offset across the whole batch), not segment:offset
+    # pairs - result['segment'] (the request's own segment, echoed back)
+    # is the one segment every instruction in this batch was decoded
+    # against, so it's also the one to translate through. A batch that
+    # runs past the 0xFFFF-byte mark past that segment (a large count
+    # near a segment boundary) produces a live_offset annotate rejects
+    # as out of range - the instruction still decodes and renders, it
+    # just doesn't get a symbol, same as any other unresolved address.
+    segment = result.get("segment")
+    if segment is None:
+        return
+    base = segment * 16
+    for inst in result.get("instructions", []):
+        symbol = annotate(segment, inst["offset"] - base)
+        if symbol is not None:
+            inst["symbol"] = symbol
+        target = inst.get("target")
+        if target is not None:
+            target_symbol = annotate(segment, target - base)
+            if target_symbol is not None:
+                inst["target_symbol"] = target_symbol
+
+
+def _disassemble(client, args, annotate=None):
     import mcp.types as types
     path = (f"/api/v1/debug/disassemble/{args['segment']}/"
             f"{args['offset']}/{args['count']}")
     result = client.get(path)
+    if annotate:
+        _annotate_disassembly(result, annotate)
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-def _backtrace(client, args):
+def _annotate_backtrace(result, annotate):
+    for frame in result.get("frames", []):
+        symbol = annotate(frame["segment"], frame["offset"])
+        if symbol is not None:
+            frame["symbol"] = symbol
+
+
+def _backtrace(client, args, annotate=None):
     import mcp.types as types
     result = client.get("/api/v1/debug/backtrace", params=args)
+    if annotate:
+        _annotate_backtrace(result, annotate)
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]

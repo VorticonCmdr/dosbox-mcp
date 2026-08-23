@@ -9,7 +9,9 @@ from dosbox_mcp.tools.debug import (
     _breakpoint_add,
     _breakpoint_delete,
     _disassemble,
+    _pause,
     _run_to,
+    _status,
     _step,
     _step_out,
     _step_over,
@@ -204,3 +206,214 @@ def test_breakpoint_delete_with_both_passes_both_through_for_the_engine_to_rejec
     _breakpoint_delete(client, {"id": 7, "index": 0})
 
     assert client.last_kwargs["json"] == {"id": 7, "index": 0}
+
+
+def _stub_annotate(mapping):
+    """A minimal annotate(segment, offset) stand-in for symbols.
+    make_annotator's real one: mapping is {(segment, offset): "symbol"},
+    anything not in it resolves to None - same contract the real
+    annotate has for an address no loaded symbol covers."""
+    return lambda segment, offset: mapping.get((segment, offset))
+
+
+class TestSymbolAnnotation:
+    def test_status_adds_a_symbol_when_annotate_resolves_the_position(self):
+        response = {"debugging": True, "stop": {
+            "stop_id": 1, "reason": "paused",
+            "registers": {"cs": 0x1000, "eip": 0x50},
+        }}
+        client = _FakeClient(response)
+        annotate = _stub_annotate({(0x1000, 0x50): "main+0x10"})
+
+        result = _status(client, annotate)
+
+        assert json.loads(result[0].text)["stop"]["symbol"] == "main+0x10"
+
+    def test_status_omits_symbol_when_annotate_resolves_nothing(self):
+        response = {"debugging": True, "stop": {
+            "stop_id": 1, "reason": "paused",
+            "registers": {"cs": 0x1000, "eip": 0x50},
+        }}
+        client = _FakeClient(response)
+
+        result = _status(client, _stub_annotate({}))
+
+        assert "symbol" not in json.loads(result[0].text)["stop"]
+
+    def test_status_with_no_annotate_leaves_the_response_untouched(self):
+        response = {"debugging": True, "stop": {
+            "stop_id": 1, "reason": "paused",
+            "registers": {"cs": 0x1000, "eip": 0x50},
+        }}
+        client = _FakeClient(response)
+
+        result = _status(client)
+
+        assert "symbol" not in json.loads(result[0].text)["stop"]
+
+    def test_pause_adds_a_symbol_to_its_stop_record(self):
+        response = {"status": "ok", "debugging": True,
+                    "stop": {"registers": {"cs": 0x2000, "eip": 0x10}}}
+        client = _FakeClient(response)
+
+        result = _pause(client, _stub_annotate({(0x2000, 0x10): "entry"}))
+
+        assert json.loads(result[0].text)["stop"]["symbol"] == "entry"
+
+    def test_step_adds_a_symbol_to_its_stop_record(self):
+        response = {"status": "ok", "debugging": True,
+                    "stop": {"registers": {"cs": 0x2000, "eip": 0x10}}}
+        client = _FakeClient(response)
+
+        result = _step(client, {}, _stub_annotate({(0x2000, 0x10): "entry"}))
+
+        assert json.loads(result[0].text)["stop"]["symbol"] == "entry"
+
+    def test_step_over_annotates_the_stop_record_when_present(self):
+        response = {"status": "ok", "stepped_over": True, "debugging": True,
+                    "resumed_from_stop_id": 1,
+                    "stop": {"stop_id": 2,
+                             "registers": {"cs": 0x2000, "eip": 0x10}}}
+        client = _FakeClient(response)
+
+        result = _step_over(client, _stub_annotate({(0x2000, 0x10): "entry"}))
+
+        assert json.loads(result[0].text)["stop"]["symbol"] == "entry"
+
+    def test_step_over_with_no_stop_record_does_not_crash(self):
+        # The common plant-and-resume path: no "stop" key at all.
+        response = {"status": "ok", "stepped_over": True, "debugging": True,
+                    "resumed_from_stop_id": 1}
+        client = _FakeClient(response)
+
+        result = _step_over(client, _stub_annotate({(0x2000, 0x10): "entry"}))
+
+        assert "stop" not in json.loads(result[0].text)
+
+    def test_wait_annotates_its_flat_response_in_place(self):
+        response = {"satisfied": True, "debugging": True, "stop_id": 3,
+                    "reason": "breakpoint",
+                    "registers": {"cs": 0x3000, "eip": 0x20}}
+        client = _FakeClient(response)
+
+        result = _wait(client, {"since_stop_id": 0},
+                       _stub_annotate({(0x3000, 0x20): "handler"}))
+
+        assert json.loads(result[0].text)["symbol"] == "handler"
+
+    def test_disassemble_annotates_each_instruction_and_its_relative_target(self):
+        response = {
+            "segment": 0x1000, "offset": 0x10, "truncated": False,
+            "instructions": [
+                {"offset": 0x1000 * 16 + 0x10, "length": 2, "text": "jmp 0x20",
+                 "target": 0x1000 * 16 + 0x20, "bytes": "AAA="},
+            ],
+        }
+        client = _FakeClient(response)
+        annotate = _stub_annotate({
+            (0x1000, 0x10): "main",
+            (0x1000, 0x20): "loop_start",
+        })
+
+        result = _disassemble(
+            client, {"segment": 0x1000, "offset": 0x10, "count": 1}, annotate)
+
+        inst = json.loads(result[0].text)["instructions"][0]
+        assert inst["symbol"] == "main"
+        assert inst["target_symbol"] == "loop_start"
+
+    def test_disassemble_omits_target_symbol_when_target_is_null(self):
+        response = {
+            "segment": 0x1000, "offset": 0x10, "truncated": False,
+            "instructions": [
+                {"offset": 0x1000 * 16 + 0x10, "length": 1, "text": "nop",
+                 "target": None, "bytes": "kA=="},
+            ],
+        }
+        client = _FakeClient(response)
+
+        result = _disassemble(
+            client, {"segment": 0x1000, "offset": 0x10, "count": 1},
+            _stub_annotate({(0x1000, 0x10): "main"}))
+
+        inst = json.loads(result[0].text)["instructions"][0]
+        assert inst["symbol"] == "main"
+        assert "target_symbol" not in inst
+
+    def test_backtrace_annotates_each_frame_independently(self):
+        response = {"frames": [
+            {"bp": 0x100, "segment": 0x1000, "offset": 0x10, "confidence": "high"},
+            {"bp": 0x0FE, "segment": 0x1000, "offset": 0x200, "confidence": "low"},
+        ], "stopped_reason": "chain_ended"}
+        client = _FakeClient(response)
+
+        result = _backtrace(client, {}, _stub_annotate({(0x1000, 0x10): "main"}))
+
+        frames = json.loads(result[0].text)["frames"]
+        assert frames[0]["symbol"] == "main"
+        assert "symbol" not in frames[1]
+
+    def test_status_does_not_annotate_the_never_stopped_placeholder_record(self):
+        # DebugStopInfo's own default before the debugger has ever
+        # stopped: reason stays "never_stopped" but registers is still
+        # a real (all-zero) dict, not empty/None - annotating cs=0/
+        # eip=0 as if it were a genuine position would be misleading.
+        response = {"debugging": False, "stop": {
+            "stop_id": 0, "reason": "never_stopped",
+            "registers": {"cs": 0, "eip": 0},
+        }}
+        client = _FakeClient(response)
+
+        result = _status(client, _stub_annotate({(0, 0): "would_be_wrong"}))
+
+        assert "symbol" not in json.loads(result[0].text)["stop"]
+
+    def test_wait_does_not_annotate_a_never_stopped_timeout_response(self):
+        response = {"satisfied": False, "debugging": False, "stop_id": 0,
+                    "reason": "never_stopped", "registers": {"cs": 0, "eip": 0}}
+        client = _FakeClient(response)
+
+        result = _wait(client, {"since_stop_id": 0},
+                       _stub_annotate({(0, 0): "would_be_wrong"}))
+
+        assert "symbol" not in json.loads(result[0].text)
+
+    def test_status_annotates_an_execute_or_memory_breakpoint_hits_own_location(self):
+        # The breakpoint's armed segment:offset is a distinct address
+        # from CS:EIP (the write can happen anywhere for a memory
+        # watchpoint) and gets its own 'symbol', nested on the
+        # breakpoint sub-object rather than the top-level 'symbol'.
+        response = {"debugging": True, "stop": {
+            "stop_id": 5, "reason": "breakpoint",
+            "registers": {"cs": 0x1000, "eip": 0x50},
+            "breakpoint": {"type": "memory", "segment": 0x2000, "offset": 0x30,
+                          "id": 1},
+        }}
+        client = _FakeClient(response)
+        annotate = _stub_annotate({
+            (0x1000, 0x50): "unrelated_code",
+            (0x2000, 0x30): "g_health",
+        })
+
+        result = _status(client, annotate)
+
+        stop = json.loads(result[0].text)["stop"]
+        assert stop["symbol"] == "unrelated_code"
+        assert stop["breakpoint"]["symbol"] == "g_health"
+
+    def test_interrupt_breakpoint_hit_gets_no_breakpoint_symbol(self):
+        # An interrupt breakpoint's segment/offset fields are meaningless
+        # (always 0) - annotating them could spuriously match whatever
+        # symbol happens to sit at ghidra address 0.
+        response = {"debugging": True, "stop": {
+            "stop_id": 5, "reason": "breakpoint",
+            "registers": {"cs": 0x1000, "eip": 0x50},
+            "breakpoint": {"type": "interrupt", "segment": 0, "offset": 0,
+                          "int": 0x21, "id": 1},
+        }}
+        client = _FakeClient(response)
+        annotate = _stub_annotate({(0, 0): "would_be_spurious"})
+
+        result = _status(client, annotate)
+
+        assert "symbol" not in json.loads(result[0].text)["stop"]["breakpoint"]

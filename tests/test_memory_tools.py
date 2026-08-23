@@ -11,6 +11,7 @@ from dosbox_mcp.client import DosboxError
 from dosbox_mcp.tools.memory import (
     MAX_LENGTH_BYTES,
     MAX_RENDERED_VIEW_BYTES,
+    _dos_memory_map,
     _mem_alloc,
     _mem_allocations,
     _mem_diff,
@@ -622,3 +623,39 @@ def test_mem_allocations_returns_the_full_response():
     result = _mem_allocations(client)
     body = json.loads(result[0].text)
     assert body == response
+
+
+def _mcb_block(segment, psp_segment=1, is_last=False):
+    return {"segment": segment, "type": 77, "pspSegment": psp_segment,
+            "sizeParas": 10, "sizeBytes": 160, "filename": "TEST",
+            "isLast": is_last}
+
+
+def test_dos_memory_map_gets_and_returns_the_map_unannotated_with_no_annotate():
+    response = {"memoryMap": [_mcb_block(0x1000)], "otherField": "ignored"}
+    client = _FakeClient(response)
+
+    result = _dos_memory_map(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/dos/internals"
+    block = json.loads(result[0].text)[0]
+    assert "symbol" not in block
+
+
+def test_dos_memory_map_annotates_each_block_by_its_owned_segment_not_its_mcb_header():
+    # block["segment"] is the MCB header paragraph - the block's own
+    # owned/addressable memory (what a symbol's address actually refers
+    # to) starts one paragraph later, so annotate() must be called with
+    # segment + 1, not the raw header segment.
+    response = {"memoryMap": [_mcb_block(0x0FFF), _mcb_block(0x2000)]}
+    client = _FakeClient(response)
+
+    def annotate(segment, offset):
+        return "main" if (segment, offset) == (0x1000, 0) else None
+
+    result = _dos_memory_map(client, annotate)
+
+    blocks = json.loads(result[0].text)
+    assert blocks[0]["symbol"] == "main"
+    assert "symbol" not in blocks[1]

@@ -365,7 +365,12 @@ def _mem_write(client, args):
     return [types.TextContent(type="text", text=json.dumps(out))]
 
 
-def register_search(server, client, add_tool, feature=None):
+def register_search(server, client, add_tool, feature=None, annotate=None):
+    """annotate, when given, is symbols.make_annotator's bound
+    (live_segment, live_offset) -> symbol-or-None function (2.17),
+    threaded through to dos_memory_map only - mem_scan's addresses are
+    physical, not segment:offset, and have no single segment to
+    translate them through the way a disassembly batch does."""
     add_tool(
         name="mem_search",
         description=(
@@ -462,11 +467,13 @@ def register_search(server, client, add_tool, feature=None):
         name="dos_memory_map",
         description=(
             "Walk the DOS MCB chain and report which PSP owns which memory "
-            "block. Shows the full conventional memory layout."
+            "block. Shows the full conventional memory layout. Each block "
+            "gets a 'symbol' field when a loaded symbol covers its segment "
+            "(debug_symbols_load) - omitted otherwise."
         ),
         read_only=True,
         schema={"type": "object", "properties": {}},
-        handler=lambda args: _dos_memory_map(client),
+        handler=lambda args: _dos_memory_map(client, annotate),
         feature=feature,
     )
 
@@ -735,8 +742,19 @@ def _mem_scan(client, args):
     return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-def _dos_memory_map(client):
+def _dos_memory_map(client, annotate=None):
     import mcp.types as types
     result = client.get("/api/v1/dos/internals")
     mem_map = result.get("memoryMap", [])
+    if annotate:
+        for block in mem_map:
+            # block["segment"] is the MCB header paragraph, not a
+            # segment any running program's CS/DS ever holds - the
+            # block's own owned/addressable memory starts one
+            # paragraph later (same convention dos.cpp's
+            # FreeMemoryCommand and this bridge's own ghidra.py already
+            # rely on: block_start = (segment + 1) * 16).
+            symbol = annotate(block["segment"] + 1, 0)
+            if symbol is not None:
+                block["symbol"] = symbol
     return [types.TextContent(type="text", text=json.dumps(mem_map, indent=2))]

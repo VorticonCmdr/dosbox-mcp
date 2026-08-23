@@ -11,7 +11,7 @@ import mcp.types as types
 from .config import MODES, Config
 from .connection import Connection, guard
 from .lifecycle import InstanceManager
-from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, ghidra, media, script, wait
+from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, ghidra, media, script, symbols, wait
 
 # Groups whose non-read-only tools register under "interact" mode.
 # Everything else non-read-only (memory surgery, port IO, cpu control,
@@ -29,7 +29,11 @@ _INTERACT_GROUPS = {"input", "media", "script", "bridge"}
 # debug_map_auto is deliberately registered under its own separate group
 # ("mapping_auto", server.py's ghidra.register_auto call) rather than
 # here, precisely because it does reach the engine.
-_LOCAL_ONLY_GROUPS = {"mapping"}
+#
+# "symbols" (debug_symbols_load/status, 2.17) belongs here for the same
+# reason as "mapping": the symbol table is bridge-local bookkeeping
+# parsed from pasted Ghidra text, never sent to the engine.
+_LOCAL_ONLY_GROUPS = {"mapping", "symbols"}
 
 
 def _mode_allows(mode: str, read_only: bool, group: str) -> bool:
@@ -105,15 +109,6 @@ def build_server(conn, mode: str = "full", manager=None):
         mod.register(server, conn, add_tool_for(group))
 
     input_tools.register(server, conn, add_tool_for("input"), feature="input")
-    memory.register(server, conn, add_tool_for("memory"), feature="memory")
-    memory.register_allocation(server, conn, add_tool_for("memory"), feature="memory")
-    memory.register_search(server, conn, add_tool_for("memory"), feature="memory")
-    memory.register_snapshot(server, conn, add_tool_for("memory"), feature="memory")
-    freeze.register(server, conn, add_tool_for("freeze"), feature="freeze")
-    io.register(server, conn, add_tool_for("port_io"), feature="port_io")
-    cpu.register(server, conn, add_tool_for("cpu"), feature="cpu_control")
-    cpu.register_state(server, conn, add_tool_for("cpu"), feature="cpu_registers")
-    debug.register(server, conn, add_tool_for("debug"), feature="debugger")
     # debug_map_set_base/to_live/to_ghidra/status are pure client-side
     # arithmetic - no engine call, so feature=None (they used to be
     # gated behind feature="debugger", which made all four permanently
@@ -126,9 +121,26 @@ def build_server(conn, mode: str = "full", manager=None):
     # deriving what to persist, so it stays gated to full mode like any
     # other engine-reaching mutation - see ghidra.register_auto's own
     # docstring.
+    #
+    # Registered before memory/debug so annotate_fn (2.17) can close
+    # over both states in time to be handed to their register() calls.
     ghidra_state = ghidra.register(server, conn, add_tool_for("mapping"))
     ghidra.register_auto(server, conn, add_tool_for("mapping_auto"),
                          ghidra_state, feature="memory")
+    symbol_state = symbols.register(server, conn, add_tool_for("symbols"))
+    annotate_fn = symbols.make_annotator(ghidra_state, symbol_state)
+
+    memory.register(server, conn, add_tool_for("memory"), feature="memory")
+    memory.register_allocation(server, conn, add_tool_for("memory"), feature="memory")
+    memory.register_search(server, conn, add_tool_for("memory"), feature="memory",
+                           annotate=annotate_fn)
+    memory.register_snapshot(server, conn, add_tool_for("memory"), feature="memory")
+    freeze.register(server, conn, add_tool_for("freeze"), feature="freeze")
+    io.register(server, conn, add_tool_for("port_io"), feature="port_io")
+    cpu.register(server, conn, add_tool_for("cpu"), feature="cpu_control")
+    cpu.register_state(server, conn, add_tool_for("cpu"), feature="cpu_registers")
+    debug.register(server, conn, add_tool_for("debug"), feature="debugger",
+                   annotate=annotate_fn)
     bridge.register(server, conn, add_tool_for("bridge"),
                     manager=manager, mode=mode, get_tools=get_tools)
 

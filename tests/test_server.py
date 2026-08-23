@@ -58,6 +58,8 @@ def test_all_tools_registered_regardless_of_features():
     for t in ("debug_map_set_base", "debug_map_auto", "debug_map_to_live",
               "debug_map_to_ghidra", "debug_map_status"):
         assert t in names
+    assert "debug_symbols_load" in names
+    assert "debug_symbols_status" in names
 
 
 class TestCapabilityModes:
@@ -90,6 +92,11 @@ class TestCapabilityModes:
         assert "debug_map_set_base" in names
         assert "debug_map_auto" not in names
         assert "debug_step_out" not in names
+        # debug_symbols_load/status (2.17) are the same kind of
+        # bridge-local bookkeeping as debug_map_set_base - never reaches
+        # the engine, so they survive observe mode too.
+        assert "debug_symbols_load" in names
+        assert "debug_symbols_status" in names
 
     def test_interact_still_requires_full_for_debug_map_auto(self):
         names = _build(mode="interact").registered_tool_names()
@@ -179,6 +186,123 @@ class TestGhidraToolsDontNeedAConnection:
         })
         assert is_error
         assert "not_connected" in text or "token" in text.lower()
+
+
+class TestSymbolAnnotationEndToEnd:
+    """Full 2.17 wiring, exercised through the real MCP call_tool
+    dispatch path rather than by calling tool module functions
+    directly: debug_map_set_base anchors a range, debug_symbols_load
+    loads a name, and every route the plan names (status, disassemble,
+    backtrace, dos_memory_map) comes back with a 'symbol' field. This is
+    the only test that would catch a build_server wiring mistake -
+    wrong registration order, annotate_fn built from the wrong state,
+    or not threaded into debug.register/memory.register at all."""
+
+    def _server(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("DOSBOX_MCP_GHIDRA_MAP", str(tmp_path / "ghidra_map.json"))
+
+        def handler(request):
+            path = request.url.path
+            if path == "/api/v1/dosbox/info":
+                return httpx.Response(200, json={
+                    "version": "0.84-da3",
+                    "features": {"debugger": True, "disassemble": True,
+                                "backtrace": True, "memory": True},
+                    "mcp_protocol": "1.0",
+                })
+            if path == "/api/v1/debug/status":
+                return httpx.Response(200, json={
+                    "debugging": True,
+                    "stop": {"stop_id": 1, "reason": "paused",
+                             "registers": {"cs": 0x2000, "eip": 0x10}},
+                })
+            if path == "/api/v1/dos/internals":
+                return httpx.Response(200, json={"memoryMap": [
+                    # segment is the MCB header paragraph, one below the
+                    # block's own owned memory (0x2000, the anchor below) -
+                    # dos_memory_map's annotation accounts for that offset.
+                    {"segment": 0x1FFF, "type": 77, "pspSegment": 1,
+                     "sizeParas": 10, "sizeBytes": 160, "filename": "TEST",
+                     "isLast": True},
+                ]})
+            if path.startswith("/api/v1/debug/disassemble/"):
+                return httpx.Response(200, json={
+                    "segment": 0x2000, "offset": 0x10, "truncated": False,
+                    "instructions": [
+                        {"offset": 0x2000 * 16 + 0x10, "length": 1,
+                         "text": "nop", "target": None, "bytes": "kA=="},
+                    ],
+                })
+            if path == "/api/v1/debug/backtrace":
+                return httpx.Response(200, json={
+                    "frames": [{"bp": 0, "segment": 0x2000, "offset": 0x10,
+                               "confidence": "high"}],
+                    "stopped_reason": "chain_ended",
+                })
+            return httpx.Response(404, json={"error": "not found"})
+
+        config = Config(base_url="http://127.0.0.1:8386", token="0" * 64)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        return build_server(conn, mode="full")
+
+    def _anchor_and_load(self, server):
+        is_error, _ = _call(server, "debug_map_set_base", {
+            "ghidra_address": 0, "live_segment": 0x2000, "live_offset": 0,
+            "ghidra_start": 0, "ghidra_end": 0x1000, "label": "main",
+        })
+        assert not is_error
+        # "base" sits at the segment's own start (live offset 0) - what
+        # dos_memory_map's block annotation looks up, since an MCB entry
+        # has no offset of its own. "entry" sits at 0x10, matching every
+        # other route's CS:EIP/frame/instruction fixture below.
+        is_error, _ = _call(server, "debug_symbols_load",
+                            {"text": "base at 0x00\nentry at 0x10\n"})
+        assert not is_error
+
+    def test_debug_status_gets_a_symbol_on_its_stop_record(self, monkeypatch, tmp_path):
+        server = self._server(monkeypatch, tmp_path)
+        self._anchor_and_load(server)
+
+        is_error, text = _call(server, "debug_status", {})
+
+        assert not is_error
+        assert json.loads(text)["stop"]["symbol"] == "entry"
+
+    def test_dos_memory_map_gets_a_symbol_on_its_matching_block(self, monkeypatch, tmp_path):
+        server = self._server(monkeypatch, tmp_path)
+        self._anchor_and_load(server)
+
+        is_error, text = _call(server, "dos_memory_map", {})
+
+        assert not is_error
+        assert json.loads(text)[0]["symbol"] == "base"
+
+    def test_debug_disassemble_gets_a_symbol_on_its_instruction(self, monkeypatch, tmp_path):
+        server = self._server(monkeypatch, tmp_path)
+        self._anchor_and_load(server)
+
+        is_error, text = _call(server, "debug_disassemble",
+                               {"segment": 0x2000, "offset": 0x10, "count": 1})
+
+        assert not is_error
+        assert json.loads(text)["instructions"][0]["symbol"] == "entry"
+
+    def test_debug_backtrace_gets_a_symbol_on_its_frame(self, monkeypatch, tmp_path):
+        server = self._server(monkeypatch, tmp_path)
+        self._anchor_and_load(server)
+
+        is_error, text = _call(server, "debug_backtrace", {})
+
+        assert not is_error
+        assert json.loads(text)["frames"][0]["symbol"] == "entry"
+
+    def test_no_symbol_field_before_anything_is_loaded(self, monkeypatch, tmp_path):
+        server = self._server(monkeypatch, tmp_path)
+
+        is_error, text = _call(server, "debug_status", {})
+
+        assert not is_error
+        assert "symbol" not in json.loads(text)["stop"]
 
 
 # ---------------------------------------------------------------------------

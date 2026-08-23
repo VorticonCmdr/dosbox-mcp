@@ -518,6 +518,26 @@ def _to_live(state, args):
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 
+def find_ghidra_address(state, live_segment, live_offset):
+    """The pure lookup _to_ghidra wraps: (ghidra_address, label) for
+    whichever anchored range's live_segment matches and whose span the
+    translated address falls into, or (None, None) if none does or the
+    inputs aren't valid 0x0000..0xFFFF values. Never raises and never
+    builds an error message - shared with symbols.py's best-effort
+    address annotation, which has nothing useful to say about *why* an
+    address didn't resolve and would rather skip it than fail the
+    response it's annotating."""
+    if _validate_seg_off(live_segment, live_offset):
+        return None, None
+    for r in state["ranges"]:
+        if r["live_segment"] != live_segment:
+            continue
+        candidate = live_offset + r["delta"]
+        if r["ghidra_start"] <= candidate < r["ghidra_end"]:
+            return candidate, r["label"]
+    return None, None
+
+
 def _to_ghidra(state, args):
     live_segment = args["live_segment"]
     live_offset = args["live_offset"]
@@ -525,20 +545,16 @@ def _to_ghidra(state, args):
     if err:
         return _error(err)
 
-    for r in state["ranges"]:
-        if r["live_segment"] != live_segment:
-            continue
-        candidate = live_offset + r["delta"]
-        if r["ghidra_start"] <= candidate < r["ghidra_end"]:
-            return [types.TextContent(type="text", text=json.dumps({
-                "ghidra_address": candidate, "label": r["label"],
-            }))]
-
-    return _error(
-        f"no anchored range covers live {live_segment:#06x}:"
-        f"{live_offset:#06x} - translating it would silently produce a "
-        "wrong Ghidra address"
-    )
+    ghidra_address, label = find_ghidra_address(state, live_segment, live_offset)
+    if ghidra_address is None:
+        return _error(
+            f"no anchored range covers live {live_segment:#06x}:"
+            f"{live_offset:#06x} - translating it would silently produce a "
+            "wrong Ghidra address"
+        )
+    return [types.TextContent(type="text", text=json.dumps({
+        "ghidra_address": ghidra_address, "label": label,
+    }))]
 
 
 def _status(state):
