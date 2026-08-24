@@ -9,13 +9,9 @@ the engine build, and the tool must be within your capability mode.
 
 These work whether or not an engine is connected.
 
-- **bridge_version** (read-only) - bridge version and protocol level.
-  `{}`
-- **bridge_status** (read-only) - connection state, engine version,
-  effective protocol, features, mode, managed instance, token presence.
-  `{}`
-- **bridge_help** (read-only) - one-call orientation: version, state,
-  and every available tool with a one-line description. `{}`
+- **bridge_status** (read-only) - bridge version, highest protocol it
+  implements, connection state, engine version, effective (negotiated)
+  protocol, features, mode, managed instance, token presence. `{}`
 - **bridge_connect** - attach to the running engine explicitly; reports
   a precise reason on failure. `{}`
 - **bridge_disconnect** - detach; the engine keeps running. `{}`

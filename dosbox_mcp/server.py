@@ -112,10 +112,6 @@ def build_server(conn, mode: str = "full", manager=None):
             wrapped,
         )
 
-    def get_tools():
-        return [(name, tool.description.split(". ")[0].rstrip(".") + ".")
-                for name, (tool, _) in registry.items()]
-
     for mod in (session, screen, media, script, wait):
         mod.register(server, conn, add_tool)
     media.register_drive(server, conn, add_tool, feature="drive")
@@ -154,8 +150,7 @@ def build_server(conn, mode: str = "full", manager=None):
     debug.register(server, conn, add_tool, feature="debugger",
                    annotate=annotate_fn)
     batch.register(server, conn, add_tool, feature="batch")
-    bridge.register(server, conn, add_tool,
-                    manager=manager, mode=mode, get_tools=get_tools)
+    bridge.register(server, conn, add_tool, manager=manager, mode=mode)
 
     @server.list_tools()
     async def list_tools():

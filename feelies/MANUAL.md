@@ -1,7 +1,8 @@
 # MANUAL - the dosbox-mcp bridge
 
-The piece of paper that came in the box. Read it once; afterwards the
-`bridge_help` tool repeats the short version on demand.
+The piece of paper that came in the box. Read it once; afterwards
+`bridge_status` covers connection state and REFCARD.md is the one-line
+reference for every tool.
 
 ## What this is
 

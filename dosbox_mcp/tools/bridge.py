@@ -34,36 +34,21 @@ def _text(payload) -> list:
     return [types.TextContent(type="text", text=payload)]
 
 
-def _version(args=None):
-    return _text({"version": _bridge_version(), "protocol": BRIDGE_PROTOCOL})
-
-
 def _status(conn, manager, mode):
     payload = conn.status()
+    # The bridge's own package version and the highest protocol it
+    # implements - distinct from `protocol` above, which is the
+    # negotiated version (None while disconnected). These used to be
+    # bridge_version's whole reason to exist as a separate tool; folded
+    # in here so deleting it didn't drop the one thing it reported that
+    # bridge_status genuinely didn't already have.
+    payload["bridge_version"] = _bridge_version()
+    payload["bridge_protocol"] = BRIDGE_PROTOCOL
     payload["mode"] = mode
     payload["managed_instance"] = {"running": manager.running,
                                    "pid": manager.pid}
     payload["config_file"] = str(default_config_path())
     return _text(payload)
-
-
-def _help(conn, manager, mode, get_tools):
-    status = conn.status()
-    connection_line = (
-        f"connected to {status['base_url']} (protocol {status['protocol']})"
-        if status["connected"]
-        else f"not connected (target {status['base_url']})"
-    )
-    lines = [
-        f"dosbox-mcp {_bridge_version()} - protocol {BRIDGE_PROTOCOL}, "
-        f"mode {mode}",
-        connection_line,
-        "",
-        "Tools:",
-    ]
-    for name, one_liner in sorted(get_tools()):
-        lines.append(f"  {name} - {one_liner}")
-    return _text("\n".join(lines))
 
 
 def _connect(conn, manager, mode):
@@ -148,42 +133,20 @@ def _swagger(conn):
     })
 
 
-def register(server, conn, add_tool, manager, mode, get_tools):
-    add_tool(
-        name="bridge_version",
-        description="Bridge version and the protocol level it implements.",
-        risk="read",
-        title="Bridge Version",
-        needs_connection=False,
-        schema={"type": "object", "properties": {}},
-        handler=lambda args: _version(args),
-    )
-
+def register(server, conn, add_tool, manager, mode):
     add_tool(
         name="bridge_status",
         description=(
-            "Bridge and connection state: engine version, effective "
-            "protocol, enabled features, capability mode, managed "
-            "instance, token presence (never the value)."
+            "Bridge and connection state: bridge version, the highest "
+            "protocol it implements, engine version, effective "
+            "(negotiated) protocol, enabled features, capability mode, "
+            "managed instance, token presence (never the value)."
         ),
         risk="read",
         title="Bridge Status",
         needs_connection=False,
         schema={"type": "object", "properties": {}},
         handler=lambda args: _status(conn, manager, mode),
-    )
-
-    add_tool(
-        name="bridge_help",
-        description=(
-            "One-call orientation: version, connection state, and every "
-            "available tool with a one-line description."
-        ),
-        risk="read",
-        title="Bridge Help",
-        needs_connection=False,
-        schema={"type": "object", "properties": {}},
-        handler=lambda args: _help(conn, manager, mode, get_tools),
     )
 
     add_tool(

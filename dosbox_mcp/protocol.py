@@ -21,8 +21,8 @@ BRIDGE_PROTOCOL = "1.0"
 # protocol - informational, never fatal.
 KNOWN_ROUTE_PREFIXES = frozenset({
     "status", "program", "dosbox", "video", "capture", "input", "memory",
-    "dos", "cpu", "io", "script", "drive", "mount", "hello",
-    "openapi.json",
+    "dos", "cpu", "io", "script", "drive", "mount", "hello", "debug",
+    "control", "batch", "openapi.json",
 })
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")

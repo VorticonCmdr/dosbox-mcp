@@ -75,7 +75,7 @@ ground truth.
 
 ## Still stuck
 
-Everything the bridge knows about its own state is in `bridge_status`
-and `bridge_help`. Everything the engine exposes is in its OpenAPI
-document, digestible via `bridge_swagger`. Between the two, the honest
-answer is usually already on screen.
+Everything the bridge knows about its own state is in `bridge_status`.
+Everything the engine exposes is in its OpenAPI document, digestible
+via `bridge_swagger`. Between the two, the honest answer is usually
+already on screen.

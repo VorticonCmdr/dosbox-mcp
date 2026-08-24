@@ -14,14 +14,12 @@ from dosbox_mcp.protocol import BRIDGE_PROTOCOL
 from dosbox_mcp.server import build_server
 from dosbox_mcp.tools.bridge import (
     _connect,
-    _help,
     _logs,
     _setup,
     _start,
     _status,
     _stop,
     _swagger,
-    _version,
 )
 
 
@@ -100,12 +98,7 @@ def _is_error(result) -> bool:
     return isinstance(result, types.CallToolResult) and result.isError
 
 
-class TestVersionStatusHelp:
-    def test_version_reports_bridge_and_protocol(self):
-        payload = json.loads(_text(_version()))
-        assert payload["protocol"] == BRIDGE_PROTOCOL
-        assert "version" in payload
-
+class TestStatus:
     def test_status_works_while_disconnected(self):
         conn = FakeConn(connected=False)
         manager = FakeManager()
@@ -119,14 +112,17 @@ class TestVersionStatusHelp:
                                            "full")))
         assert payload["managed_instance"] == {"running": True, "pid": 4242}
 
-    def test_help_lists_tools_with_one_liners(self):
-        tools = [("bridge_status", "Bridge and connection state."),
-                 ("screen_text", "Read the text screen.")]
-        text = _text(_help(FakeConn(), FakeManager(), "full", lambda: tools))
-        assert "bridge_status" in text
-        assert "Bridge and connection state." in text
-        assert "screen_text" in text
-        assert BRIDGE_PROTOCOL in text
+    def test_status_reports_bridge_version_and_protocol_ceiling(self):
+        # Folded in from the deleted bridge_version tool - the one thing
+        # it reported that bridge_status didn't already have: the
+        # bridge's own package version, and the highest protocol it
+        # implements (distinct from `protocol`, the negotiated version,
+        # which is None while disconnected).
+        conn = FakeConn(connected=False)
+        payload = json.loads(_text(_status(conn, FakeManager(), "full")))
+        assert payload["bridge_protocol"] == BRIDGE_PROTOCOL
+        assert isinstance(payload["bridge_version"], str) and payload["bridge_version"]
+        assert payload["protocol"] is None
 
 
 class TestConnectDisconnect:
@@ -237,6 +233,23 @@ class TestSwagger:
         assert "/api/v1/teleporter/engage" in payload["unknown_to_protocol"]
         assert "/api/v1/status" not in payload["unknown_to_protocol"]
 
+    def test_control_debug_and_batch_prefixes_are_known(self):
+        # /api/v1/control/shutdown and /api/v1/batch were both real,
+        # live false positives against the actual engine's openapi.json
+        # before this item (confirmed live). /api/v1/debug/* joins them
+        # once openapi.json documents the debugger routes (it currently
+        # doesn't, so this spec fixture stands in for that future
+        # state).
+        conn = FakeConn()
+        conn.spec = {"paths": {
+            "/api/v1/control/shutdown": {},
+            "/api/v1/debug/status": {},
+            "/api/v1/debug/breakpoints": {},
+            "/api/v1/batch": {},
+        }}
+        payload = json.loads(_text(_swagger(conn)))
+        assert payload["unknown_to_protocol"] == []
+
 
 class TestRegistration:
     def _names(self, mode):
@@ -245,19 +258,25 @@ class TestRegistration:
 
     def test_full_registers_all_bridge_tools(self):
         names = self._names("full")
-        for tool in ("bridge_version", "bridge_status", "bridge_help",
-                     "bridge_connect", "bridge_disconnect", "bridge_start",
-                     "bridge_stop", "bridge_logs", "bridge_setup",
-                     "bridge_swagger"):
+        for tool in ("bridge_status", "bridge_connect", "bridge_disconnect",
+                     "bridge_start", "bridge_stop", "bridge_logs",
+                     "bridge_setup", "bridge_swagger"):
             assert tool in names, tool
 
     def test_observe_gets_read_only_bridge_tools_only(self):
         names = self._names("observe")
-        for tool in ("bridge_version", "bridge_status", "bridge_help",
-                     "bridge_logs", "bridge_swagger"):
+        for tool in ("bridge_status", "bridge_logs", "bridge_swagger"):
             assert tool in names, tool
         for tool in ("bridge_start", "bridge_stop", "bridge_setup"):
             assert tool not in names, tool
+
+    def test_bridge_version_and_bridge_help_are_gone(self):
+        # bridge_version folded into bridge_status (3.4); bridge_help
+        # deleted outright - it re-sent a tool list the client already
+        # has, via a one-liner extraction that mangled multi-sentence
+        # descriptions.
+        for tool in ("bridge_version", "bridge_help"):
+            assert tool not in self._names("full"), tool
 
     def test_interact_includes_lifecycle(self):
         names = self._names("interact")
