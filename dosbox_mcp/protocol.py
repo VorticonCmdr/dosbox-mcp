@@ -13,17 +13,47 @@ implicit 1.0, because 1.0 is defined as the surface those releases ship.
 
 import re
 
-# Highest protocol version this bridge implements.
-BRIDGE_PROTOCOL = "1.0"
+# Highest protocol version this bridge implements. PROTOCOL.md's
+# changelog already documents everything this bridge's tools cover
+# (mouse, batch, script/log, instance_id, ...) up through 1.13.0
+# (draft); 1.14.0 is this item (4.2) itself - dosbox/info finally sends
+# mcp_protocol/name for real, and GET /api/v1/hello is implemented on
+# the reference engine for the first time.
+BRIDGE_PROTOCOL = "1.14"
 
-# Route groups the 1.0 contract knows (first path segment after
-# /api/v1/). bridge_swagger reports anything else as unknown to the
-# protocol - informational, never fatal.
-KNOWN_ROUTE_PREFIXES = frozenset({
-    "status", "program", "dosbox", "video", "capture", "input", "memory",
-    "dos", "cpu", "io", "script", "drive", "mount", "hello", "debug",
-    "control", "batch", "openapi.json",
-})
+# Route groups (first path segment after /api/v1/) each protocol minor
+# adds, on top of everything every earlier minor already knew - nothing
+# is ever removed from the protocol, so this is purely additive.
+# bridge_swagger sums prefixes up through the negotiated minor to decide
+# what's "known to the protocol" for the peer it's actually talking to;
+# see known_route_prefixes() below. GET /api/v1/hello itself only exists
+# as of 1.1, so "hello" is the one genuinely new prefix here - everything
+# else (including debug/control/batch/wait) was already unconditionally
+# recognized before minor versioning existed for this table, and staying
+# in the 1.0 baseline keeps an engine that still only advertises implicit
+# 1.0 (predates mcp_protocol) from having its already-real routes newly
+# misreported as unknown. "wait" was missing from the pre-4.2 flat set
+# entirely - a real, live false positive against a running engine's
+# openapi.json (POST /api/v1/wait), caught during this item's live
+# verification, not something 4.2 introduced.
+KNOWN_ROUTE_PREFIXES_BY_MINOR: dict[int, frozenset[str]] = {
+    0: frozenset({
+        "status", "program", "dosbox", "video", "capture", "input", "memory",
+        "dos", "cpu", "io", "script", "drive", "mount", "debug",
+        "control", "batch", "wait", "openapi.json",
+    }),
+    1: frozenset({"hello"}),
+}
+
+
+def known_route_prefixes(minor: int) -> frozenset[str]:
+    """Route prefixes known as of protocol 1.<minor>, cumulative over
+    every minor up to and including it."""
+    known: set[str] = set()
+    for m, prefixes in KNOWN_ROUTE_PREFIXES_BY_MINOR.items():
+        if m <= minor:
+            known |= prefixes
+    return frozenset(known)
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
 

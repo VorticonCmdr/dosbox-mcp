@@ -87,7 +87,7 @@ answer 404 and are treated as implicit 1.0. When implemented, it
 returns exactly three fields and nothing else:
 
 ```json
-{"name": "dosbox-automation", "version": "0.84-da3", "mcp_protocol": "1.0"}
+{"name": "dosbox-automation", "version": "0.84-da3", "mcp_protocol": "1.14"}
 ```
 
 Its purpose is diagnostics before authentication: a client can
@@ -707,3 +707,18 @@ changed and the version it produces.
   a client can distinguish a stale token on the same engine process
   from a different process (a restart) answering at the same URL, and
   avoid replaying a mutating request into a fresh guest session.
+- **1.14.0 (draft)** - closes the negotiation gap between this
+  specification and the reference engine: `dosbox/info` now actually
+  sends `name` and `mcp_protocol` (previously absent, so every engine
+  negotiated as implicit 1.0 regardless of how much of the surface
+  above it had shipped), and `GET /api/v1/hello` - documented since
+  1.0.0 but never implemented - is now a real route on the reference
+  engine, sourced from the same `name`/`mcp_protocol` values as
+  `dosbox/info` so the two can never disagree. No new fields or
+  behavior beyond what "Discovery" above already specifies; this is the
+  reference implementation catching up to its own specification, not a
+  new capability. A separate, engine-internal `IsPublicApiPath` check
+  is what actually exempts `hello` from the bearer-token requirement -
+  kept deliberately apart from the unrelated allowlist that exempts the
+  documentation assets (landing page, `openapi.json`, the vendored
+  Swagger UI), so widening one can never accidentally widen the other.

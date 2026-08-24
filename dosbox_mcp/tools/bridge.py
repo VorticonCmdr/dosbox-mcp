@@ -18,7 +18,7 @@ import mcp.types as types
 from ..config import ToolProtectedKey, default_config_path, update_config_file
 from ..connection import NotConnected, to_error_result
 from ..lifecycle import LifecycleError
-from ..protocol import BRIDGE_PROTOCOL, KNOWN_ROUTE_PREFIXES
+from ..protocol import BRIDGE_PROTOCOL, known_route_prefixes, parse_version
 
 
 def _bridge_version() -> str:
@@ -113,18 +113,35 @@ def _setup(args):
     return _text(f"saved to {path} - takes effect at the next bridge start")
 
 
+def _known_prefixes_for(conn) -> frozenset[str]:
+    """Route prefixes considered known for whatever protocol minor this
+    connection actually negotiated - not just the highest the bridge
+    itself implements, so an engine still stuck on an older negotiated
+    minor gets judged against what that minor promised, not against
+    routes this bridge merely happens to also understand."""
+    effective = getattr(conn, "effective_protocol", None)
+    if effective is None:
+        # Disconnected, or negotiation hasn't run - the closest
+        # available proxy is the highest minor this bridge implements.
+        _, minor = parse_version(BRIDGE_PROTOCOL)
+    else:
+        _, minor = parse_version(effective)
+    return known_route_prefixes(minor)
+
+
 def _swagger(conn):
     try:
         spec = conn.get("/openapi.json")
     except NotConnected as e:
         return to_error_result(str(e), tool="bridge_swagger", code="not_connected")
     paths = spec.get("paths", {})
+    known = _known_prefixes_for(conn)
     by_prefix: dict[str, int] = {}
     unknown = []
     for path in paths:
         prefix = path.removeprefix("/api/v1/").split("/", 1)[0]
         by_prefix[prefix] = by_prefix.get(prefix, 0) + 1
-        if prefix not in KNOWN_ROUTE_PREFIXES:
+        if prefix not in known:
             unknown.append(path)
     return _text({
         "routes": len(paths),

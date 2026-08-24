@@ -24,11 +24,16 @@ from dosbox_mcp.tools.bridge import (
 
 
 class FakeConn:
-    def __init__(self, connected=True, fail_with=None):
+    def __init__(self, connected=True, fail_with=None, effective_protocol=None):
         self._connected = connected
         self._fail_with = fail_with
         self.detached = 0
         self.spec = {"paths": {}}
+        # None (the default) means "not connected / no negotiation yet" -
+        # _known_prefixes_for falls back to the bridge's own highest
+        # implemented minor in that case, same as production Connection
+        # before its first successful attach.
+        self.effective_protocol = effective_protocol
 
     def status(self):
         return {"connected": self._connected, "base_url": "http://127.0.0.1:8386",
@@ -236,10 +241,11 @@ class TestSwagger:
     def test_control_debug_and_batch_prefixes_are_known(self):
         # /api/v1/control/shutdown and /api/v1/batch were both real,
         # live false positives against the actual engine's openapi.json
-        # before this item (confirmed live). /api/v1/debug/* joins them
-        # once openapi.json documents the debugger routes (it currently
-        # doesn't, so this spec fixture stands in for that future
-        # state).
+        # before this item (confirmed live); /api/v1/debug/* joined them
+        # once 4.1 made openapi.json document the debugger routes. All
+        # three stay in the 1.0 baseline (4.2) rather than moving to the
+        # 1.1 addition, precisely so this stays true even against an
+        # engine that only ever negotiates implicit 1.0.
         conn = FakeConn()
         conn.spec = {"paths": {
             "/api/v1/control/shutdown": {},
@@ -247,6 +253,40 @@ class TestSwagger:
             "/api/v1/debug/breakpoints": {},
             "/api/v1/batch": {},
         }}
+        payload = json.loads(_text(_swagger(conn)))
+        assert payload["unknown_to_protocol"] == []
+
+    def test_hello_is_unknown_against_a_peer_that_only_negotiated_1_0(self):
+        # GET /api/v1/hello is what 4.2 adds - it only exists once both
+        # sides speak 1.1. An engine an older bridge (or an older
+        # engine's implicit-1.0 fallback) negotiated down to 1.0 with
+        # has no business being credited with a route that protocol
+        # minor never promised.
+        conn = FakeConn(effective_protocol="1.0")
+        conn.spec = {"paths": {"/api/v1/hello": {}}}
+        payload = json.loads(_text(_swagger(conn)))
+        assert payload["unknown_to_protocol"] == ["/api/v1/hello"]
+
+    def test_hello_is_known_against_a_peer_that_negotiated_1_1(self):
+        conn = FakeConn(effective_protocol="1.1")
+        conn.spec = {"paths": {"/api/v1/hello": {}}}
+        payload = json.loads(_text(_swagger(conn)))
+        assert payload["unknown_to_protocol"] == []
+
+    def test_wait_prefix_is_known(self):
+        # POST /api/v1/wait was a real, live false positive against the
+        # actual engine's openapi.json (confirmed live) - missing from
+        # the pre-4.2 flat set entirely, not just a version-gating gap.
+        conn = FakeConn()
+        conn.spec = {"paths": {"/api/v1/wait": {}}}
+        payload = json.loads(_text(_swagger(conn)))
+        assert payload["unknown_to_protocol"] == []
+
+    def test_falls_back_to_bridge_protocol_when_not_yet_negotiated(self):
+        # effective_protocol defaults to None on a fresh FakeConn, same
+        # as a real Connection before its first successful attach.
+        conn = FakeConn()
+        conn.spec = {"paths": {"/api/v1/hello": {}}}
         payload = json.loads(_text(_swagger(conn)))
         assert payload["unknown_to_protocol"] == []
 

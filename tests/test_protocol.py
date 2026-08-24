@@ -8,6 +8,7 @@ from dosbox_mcp.protocol import (
     BRIDGE_PROTOCOL,
     IncompatiblePeer,
     effective_version,
+    known_route_prefixes,
     negotiate,
     parse_version,
 )
@@ -76,3 +77,30 @@ class TestEffectiveVersion:
     def test_pin_wrong_major_rejected(self):
         with pytest.raises(ValueError):
             effective_version({"features": {}}, pin="99.0")
+
+
+class TestKnownRoutePrefixes:
+    def test_minor_0_excludes_hello(self):
+        assert "hello" not in known_route_prefixes(0)
+
+    def test_minor_1_includes_everything_minor_0_has_plus_hello(self):
+        assert known_route_prefixes(1) == known_route_prefixes(0) | {"hello"}
+
+    def test_debug_control_batch_wait_are_baseline_not_a_later_addition(self):
+        # These routes existed and were already unconditionally
+        # recognized before minor-versioning existed for this table;
+        # they must not have silently moved to a later minor, or an
+        # engine still negotiating implicit 1.0 would start seeing its
+        # already-real routes misreported as unknown. "wait" was a real
+        # gap caught live against a running engine while building this -
+        # POST /api/v1/wait was never in the pre-4.2 flat set at all.
+        for prefix in ("debug", "control", "batch", "wait"):
+            assert prefix in known_route_prefixes(0)
+
+    def test_a_future_minor_beyond_what_this_bridge_knows_still_returns_everything_defined(self):
+        # Cumulative by construction: an unrecognized (future) minor
+        # number just means "no additional entries beyond what's
+        # defined," not an error - callers only ever pass minors this
+        # bridge itself understands (BRIDGE_PROTOCOL's own minor, or a
+        # peer's negotiated minor which can never exceed it).
+        assert known_route_prefixes(99) == known_route_prefixes(1)
