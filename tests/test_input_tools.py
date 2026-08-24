@@ -6,6 +6,8 @@ import json
 
 from dosbox_mcp.tools.input import (
     _input_sequence,
+    _mouse_position,
+    _mouse_set_position,
     _record_pause,
     _record_start,
     _record_status,
@@ -92,6 +94,28 @@ def test_replay_cancel_deletes_with_no_body():
     assert client.last_path == "/api/v1/input/replay"
     assert "json" not in client.last_kwargs
     assert json.loads(result[0].text) == {"cancelled": True}
+
+
+def test_mouse_position_gets_the_mouse_route():
+    response = {"driver_started": True, "x": 320, "y": 96,
+                "buttons": {"left": False, "right": False, "middle": False}}
+    client = _FakeClient(response)
+
+    result = _mouse_position(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/input/mouse"
+    assert json.loads(result[0].text) == response
+
+
+def test_mouse_set_position_forwards_x_and_y():
+    client = _FakeClient({"status": "ok", "x": 160, "y": 100})
+
+    _mouse_set_position(client, {"x": 160, "y": 100})
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/input/mouse"
+    assert client.last_kwargs["json"] == {"x": 160, "y": 100}
 
 
 def test_record_start_posts_with_no_body():

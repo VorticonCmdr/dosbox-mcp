@@ -119,9 +119,13 @@ A typical session, in the agent's words:
 3. `input_key` / `input_sequence` - press keys; `input_type` types a
    whole string at a safe pace.
 4. `screen_capture` - grab a frame when the screen is graphical.
-5. `drive_swap` - when an installer prompts for the next disk, swap it
+5. `mouse_position` / `mouse_set_position` - for a mouse-driven
+   installer or GUI-era program, read where the DOS cursor is and warp
+   it to an exact pixel instead of guessing at relative motion; a click
+   is still a `mouse_button` event pair via `input_sequence`.
+6. `drive_swap` - when an installer prompts for the next disk, swap it
    in without leaving the loop above.
-6. `script_run` - for anything fiddly, run a small sandboxed Lua
+7. `script_run` - for anything fiddly, run a small sandboxed Lua
    script in the engine. This is the escape hatch: whatever no
    dedicated tool covers, a script can usually do.
 

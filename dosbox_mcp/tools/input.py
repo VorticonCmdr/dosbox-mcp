@@ -19,6 +19,7 @@ MAX_INPUT_EVENTS = 32000
 MAX_RECORDING_NAME_LENGTH = 64
 MAX_EVENT_TIME_MS = 24 * 60 * 60 * 1000  # 24 hours
 MAX_EVENT_FRAME = 1_000_000_000
+MAX_MOUSE_COORDINATE = 65535
 # RecordingStore::IsValidName's exact rule (also enforced server-side,
 # this is belt-and-suspenders so a bad name never round-trips at all).
 _RECORDING_NAME_PATTERN = "^[A-Za-z0-9_-]+$"
@@ -83,20 +84,30 @@ _TYPE_SPECIFIC_PROPS = {
             "type": "number",
             "description": "Vertical mouse delta in pixels, positive is down.",
         },
-        # The engine accepts and round-trips these (a record_stop
-        # response's mouse_move events always carry them) but ignores
-        # them for actual dispatch - only x_rel/y_rel move the cursor.
-        # Accepted here so feeding a recorded 'events' array straight
-        # back into this tool doesn't fail schema validation; not
-        # documented as a way to position the cursor (see this tool's
-        # own "no absolute positioning" note).
+        # Warps the cursor directly instead of moving it relatively -
+        # the same closed loop as mouse_set_position, folded into a
+        # sequence event. A recorded event's own x_abs/y_abs (host
+        # window pixels, not this coordinate space) are never round-
+        # tripped back through this field - see record_stop's
+        # 'host_x_abs'/'host_y_abs'.
         "x_abs": {
-            "type": "number",
-            "description": "Recorded absolute X - accepted, ignored for dispatch.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": MAX_MOUSE_COORDINATE,
+            "description": (
+                "Warp the cursor to this exact guest pixel X position "
+                "instead of moving relatively. Must be given together "
+                "with 'y_abs', or not at all; when given, 'x_rel'/"
+                "'y_rel' on the same event are ignored. No effect if "
+                "the guest never started the INT 33h driver (see "
+                "mouse_position's driver_started)."
+            ),
         },
         "y_abs": {
-            "type": "number",
-            "description": "Recorded absolute Y - accepted, ignored for dispatch.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": MAX_MOUSE_COORDINATE,
+            "description": "Guest pixel Y position. See 'x_abs'.",
         },
     },
     "mouse_button": {
@@ -119,8 +130,8 @@ _TYPE_SPECIFIC_PROPS = {
 }
 
 
-def _event_branch(type_name, *, type_required):
-    return {
+def _event_branch(type_name, *, type_required, dependent_required=None):
+    branch = {
         "type": "object",
         "properties": {
             "type": {
@@ -137,6 +148,9 @@ def _event_branch(type_name, *, type_required):
         "additionalProperties": False,
         **({"required": ["type"]} if type_required else {}),
     }
+    if dependent_required:
+        branch["dependentRequired"] = dependent_required
+    return branch
 
 
 # 'key' is the only type omission defaults to (matching the engine's
@@ -146,7 +160,11 @@ def _event_branch(type_name, *, type_required):
 # branch (oneOf requires exactly one match).
 _EVENT_ONE_OF = [
     _event_branch("key", type_required=False),
-    _event_branch("mouse_move", type_required=True),
+    _event_branch(
+        "mouse_move",
+        type_required=True,
+        dependent_required={"x_abs": ["y_abs"], "y_abs": ["x_abs"]},
+    ),
     _event_branch("mouse_button", type_required=True),
     _event_branch("mouse_wheel", type_required=True),
 ]
@@ -230,13 +248,14 @@ def register(server, client, add_tool, feature=None):
             "any event - a stored recording always replays frame-"
             "relative) is already running, or 404 if 'recording' names "
             "nothing stored. "
-            "Mouse movement is RELATIVE (x_rel/y_rel deltas from the "
-            "current cursor position); there is no absolute positioning. "
-            "To reach a known position, sweep past a screen corner first "
-            "(e.g. x_rel:-4000, y_rel:-4000 pins the cursor top-left), "
-            "then move by the target offset. A click is a mouse_button "
-            "press event followed by a release event. Unknown fields are "
-            "rejected with an error naming the allowed ones."
+            "Mouse movement is relative by default (x_rel/y_rel deltas "
+            "from the current cursor position); give both 'x_abs' and "
+            "'y_abs' on a mouse_move event to warp to an exact guest "
+            "pixel position instead (see mouse_position/"
+            "mouse_set_position for the same thing outside a sequence). "
+            "A click is a mouse_button press event followed by a "
+            "release event. Unknown fields are rejected with an error "
+            "naming the allowed ones."
         ),
         risk="mutate_guest",
         title="Inject Input Sequence",
@@ -265,6 +284,66 @@ def register(server, client, add_tool, feature=None):
             },
         },
         handler=lambda args: _input_sequence(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mouse_position",
+        description=(
+            "The built-in INT 33h DOS mouse driver's own idea of where "
+            "the cursor is and which buttons are down, in guest pixel "
+            "coordinates. driver_started is false - x/y/buttons all "
+            "defaulted, not meaningful - for a guest that never started "
+            "the driver, one talking to the PS/2 or serial mouse "
+            "directly instead (Windows 3.x, some protected-mode games), "
+            "or one currently running Windows 3.x in 386 Enhanced mode: "
+            "none of those have a readable position here."
+        ),
+        risk="read",
+        title="Mouse Position",
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _mouse_position(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="mouse_set_position",
+        description=(
+            "Warp the DOS mouse driver's cursor to an exact guest "
+            "pixel position - not a relative move, a direct jump, "
+            "clamped to the driver's currently configured min/max "
+            "range. Fires a mouse-moved event so a registered guest "
+            "callback runs and the cursor redraws. Returns the position "
+            "actually applied, which can differ from the request even "
+            "well inside the min/max range: the driver floors both "
+            "axes to its own position granularity (a multiple of a few "
+            "pixels in most video modes), independent of any clamping. "
+            "Refused (409) if the guest never started the INT 33h "
+            "driver, or is currently running Windows 3.x in 386 "
+            "Enhanced mode - see mouse_position's driver_started."
+        ),
+        risk="mutate_guest",
+        title="Set Mouse Position",
+        interact_ok=True,
+        idempotent=True,
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "x": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_MOUSE_COORDINATE,
+                },
+                "y": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": MAX_MOUSE_COORDINATE,
+                },
+            },
+            "required": ["x", "y"],
+        },
+        handler=lambda args: _mouse_set_position(client, args),
         feature=feature,
     )
 
@@ -460,6 +539,19 @@ def _input_sequence(client, args):
     if "recording" in args:
         body["recording"] = args["recording"]
     result = client.post("/api/v1/input/sequence", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _mouse_position(client):
+    import mcp.types as types
+    result = client.get("/api/v1/input/mouse")
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _mouse_set_position(client, args):
+    import mcp.types as types
+    body = {"x": args["x"], "y": args["y"]}
+    result = client.post("/api/v1/input/mouse", json=body)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 

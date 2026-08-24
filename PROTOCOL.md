@@ -315,7 +315,7 @@ Semantics that are part of the contract, not just the schemas:
   call when nothing is running (`{cancelled: false}`, not an error).
 - `InputRecording` coalesces consecutive `mouse_move` samples landing
   in the same rendered frame into one event (summed `x_rel`/`y_rel`,
-  latest `x_abs`/`y_abs`) - host mice sample far faster than the
+  latest `host_x_abs`/`host_y_abs`) - host mice sample far faster than the
   render clock, and the frame-timed replay engine only ever dispatches
   on frame boundaries anyway, so nothing is lost. A recording is
   capped at `capabilities.input.limits.max_events` (32000) events;
@@ -595,3 +595,40 @@ changed and the version it produces.
   the single-op `PUT /memory/{offset}` route's `If-Match` header) -
   there is no per-operation header inside a JSON body, so `mem_cas`
   spells the same concept out as an explicit `expected` field instead.
+- **1.12.0 (draft)** - adds `GET /input/mouse` and `POST /input/mouse`
+  under the existing `input` feature flag, and
+  `capabilities.input.limits.max_mouse_coordinate` (65535). `GET`
+  returns `{driver_started, x, y, buttons: {left, right, middle}}` -
+  the built-in INT 33h DOS mouse driver's own cursor position and
+  button state, in guest pixels; `driver_started:false` (x/y/buttons
+  all defaulted) if the guest never started the driver, or one talking
+  to the PS/2 or serial mouse directly instead (Windows 3.x, some
+  protected-mode games), or - new in this release - while the guest is
+  running Windows 3.x in 386 Enhanced mode, where touching the driver's
+  memory from this route is unsafe regardless of whether it was
+  started. `POST {x, y}` (both required, integers `0..max_mouse_coordinate`)
+  warps the cursor directly to that position - not a relative move -
+  clamped to the driver's currently configured min/max range and
+  further floored to the driver's position granularity (a multiple of
+  a few pixels in most video modes; the response's `x`/`y` reflect the
+  actual landed position, which can differ from the request even well
+  inside the min/max range). 409 if the driver isn't started or the
+  guest is in Windows 386 Enhanced mode.
+  Also a genuine behavior change to `POST /input/sequence`'s existing
+  `mouse_move` event: `x_abs`/`y_abs` (previously accepted and
+  round-tripped but never used for dispatch) are now the same closed
+  loop as `POST /input/mouse`, folded into a sequence event - must be
+  given together or not at all (400 otherwise), and when given,
+  `x_rel`/`y_rel` on the same event are ignored. This does not affect
+  replaying a stored recording (`{"recording": "<name>"}`): a
+  recording's own events never set the absolute-position path, only
+  their `x_rel`/`y_rel` drive replay, unchanged.
+  Because `x_abs`/`y_abs` now has real effect, `POST /input/record/stop`
+  and `GET /input/record/status`'s dumped `mouse_move` events (see
+  1.10.0) rename their absolute-position fields from `x_abs`/`y_abs` to
+  `host_x_abs`/`host_y_abs` - host window pixels at record time, a
+  different coordinate space from the request-side `x_abs`/`y_abs`
+  (guest DOS screen pixels). This is deliberate: reposting a dump
+  verbatim as a `/input/sequence` body now fails loudly (400, unknown
+  field) instead of silently warping the cursor using host coordinates
+  misread as guest ones.

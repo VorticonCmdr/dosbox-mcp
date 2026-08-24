@@ -70,6 +70,12 @@ These work whether or not an engine is connected.
   recording: name, event_count, duration_ms, truncated. `{}`
 - **recording_delete** - remove a stored recording by name.
   `{"name": "install-run-1"}`
+- **mouse_position** (read-only) - the DOS mouse driver's cursor
+  position and button state, in guest pixels. `driver_started:false`
+  if the guest never started the INT 33h driver. `{}`
+- **mouse_set_position** - warp the cursor to an exact guest pixel
+  position (clamped to the driver's screen range), instead of moving
+  it relatively. `{"x": 160, "y": 100}`
 
 ## Memory (feature: memory)
 

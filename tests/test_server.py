@@ -47,6 +47,8 @@ def test_all_tools_registered_regardless_of_features():
     assert "record_status" in names
     assert "recordings_list" in names
     assert "recording_delete" in names
+    assert "mouse_position" in names
+    assert "mouse_set_position" in names
     assert "mem_search" in names
     assert "dos_memory_map" in names
     assert "mem_alloc" in names
@@ -96,6 +98,8 @@ class TestCapabilityModes:
         assert "record_status" in names
         assert "recordings_list" in names
         assert "recording_delete" not in names
+        assert "mouse_position" in names
+        assert "mouse_set_position" not in names
         assert "script_run" not in names
         assert "drive_swap" not in names
         assert "mount_lock" not in names
@@ -148,6 +152,7 @@ class TestCapabilityModes:
         assert "record_start" in names
         assert "record_stop" in names
         assert "recording_delete" in names
+        assert "mouse_set_position" in names
         assert "script_run" in names
         assert "video_capture_start" in names
         assert "drive_swap" in names
@@ -228,13 +233,17 @@ class TestRiskTaxonomy:
     def test_non_destructive_mutators_are_not_flagged_destructive(self):
         tools = {t.name: t for t in _list_tools(_build(mode="full"))}
         for name in ("mem_write", "freeze_set", "input_type",
-                     "cpu_write_register", "batch_execute"):
+                     "cpu_write_register", "batch_execute",
+                     "mouse_set_position"):
             assert tools[name].annotations.destructiveHint is False, name
 
     def test_idempotent_hints_match_the_documented_examples(self):
         tools = {t.name: t for t in _list_tools(_build(mode="full"))}
         assert tools["mem_write"].annotations.idempotentHint is True
         assert tools["input_type"].annotations.idempotentHint is False
+        # Warping to the same (x, y) twice leaves the same end state -
+        # genuinely idempotent, unlike input_type/input_key.
+        assert tools["mouse_set_position"].annotations.idempotentHint is True
         # A batch mixing an idempotent op (e.g. mem_write) with a
         # deliberately non-idempotent one (port_write - see io.py's own
         # reasoning) can't honestly claim idempotency for the whole call.
@@ -271,14 +280,41 @@ class TestInputSequenceSchema:
             return False
 
     def test_recorded_mouse_move_round_trips(self):
-        # record_stop's response always includes x_abs/y_abs on a
-        # mouse_move event (the engine serializes them unconditionally,
-        # even though only x_rel/y_rel affect dispatch) - feeding that
-        # array straight back into input_sequence must not fail schema
-        # validation.
+        # record_stop's response includes only x_rel/y_rel on a
+        # mouse_move event, the fields that actually drive replay -
+        # feeding that straight back into input_sequence must not fail
+        # schema validation.
         event = {"type": "mouse_move", "t": 10.0, "frame": 1,
-                 "x_rel": 5.0, "y_rel": -2.0, "x_abs": 320.0, "y_abs": 180.0}
+                 "x_rel": 5.0, "y_rel": -2.0}
         assert self._validates({"events": [event]})
+
+    def test_recorded_mouse_move_host_fields_do_not_round_trip(self):
+        # record_stop actually serializes a recorded mouse_move's
+        # absolute position as host_x_abs/host_y_abs (item 2.14), host
+        # window pixels - a different coordinate space from
+        # input_sequence's own x_abs/y_abs (guest DOS screen pixels).
+        # Reposting a dump verbatim must fail schema validation loudly
+        # rather than silently warp the cursor with the wrong numbers.
+        event = {"type": "mouse_move", "t": 10.0, "frame": 1,
+                 "x_rel": 5.0, "y_rel": -2.0,
+                 "host_x_abs": 320.0, "host_y_abs": 180.0}
+        assert not self._validates({"events": [event]})
+
+    def test_mouse_move_x_abs_and_y_abs_validate_together(self):
+        event = {"type": "mouse_move", "x_abs": 160, "y_abs": 100}
+        assert self._validates({"events": [event]})
+
+    def test_mouse_move_x_abs_without_y_abs_does_not_validate(self):
+        event = {"type": "mouse_move", "x_abs": 160}
+        assert not self._validates({"events": [event]})
+
+    def test_mouse_move_x_abs_out_of_range_does_not_validate(self):
+        event = {"type": "mouse_move", "x_abs": 70000, "y_abs": 100}
+        assert not self._validates({"events": [event]})
+
+    def test_mouse_move_x_abs_negative_does_not_validate(self):
+        event = {"type": "mouse_move", "x_abs": -1, "y_abs": 100}
+        assert not self._validates({"events": [event]})
 
     def test_event_time_and_frame_have_upper_bounds(self):
         assert not self._validates(
