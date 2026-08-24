@@ -49,6 +49,9 @@ class DosboxClient:
             timeout=30.0,
         )
 
+    def close(self) -> None:
+        self._client.close()
+
     def _handle(self, resp, method: str, path: str):
         if resp.status_code >= 400:
             try:

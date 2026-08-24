@@ -191,6 +191,8 @@ class Connection:
                 self._try_connect()
 
     def detach(self):
+        if self._client is not None:
+            self._client.close()
         self._client = None
         self._features = {}
         self._capabilities = {}
