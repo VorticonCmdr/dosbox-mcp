@@ -3,6 +3,7 @@
 #
 
 import logging
+import threading
 
 import httpx
 import mcp.types as types
@@ -43,6 +44,18 @@ class Connection:
         # from the token now belonging to a different process - see
         # EngineRestarted.
         self._instance_id: str | None = None
+        # 3.7 (anyio.to_thread.run_sync) means concurrent tool calls
+        # genuinely run in parallel OS threads now, not just nominally
+        # concurrent asyncio tasks serialized by a blocking call. Two
+        # threads hitting a 401 at once must not each run their own
+        # detach()/reconnect independently: the second one would read
+        # _instance_id as None (the first already cleared it) and
+        # compare it against the reconnected id, raising a spurious
+        # EngineRestarted for an engine that never restarted. _lock
+        # guards state transitions only - never the request itself, so
+        # a slow call still can't stall an unrelated one.
+        self._lock = threading.Lock()
+        self._generation = 0
 
     @property
     def config(self) -> Config:
@@ -164,12 +177,18 @@ class Connection:
         self._capabilities = info.get("capabilities", {})
         self._effective = effective
         self._instance_id = info.get("instance_id")
+        self._generation += 1
         log.info("attached to %s (%s, protocol %s)", self._config.base_url,
                  info.get("version", "?"), self.effective_protocol)
 
     def ensure_connected(self):
-        if self._client is None:
-            self._try_connect()
+        if self._client is not None:
+            return
+        with self._lock:
+            # Double-checked: another thread may have connected while
+            # this one was waiting for the lock.
+            if self._client is None:
+                self._try_connect()
 
     def detach(self):
         self._client = None
@@ -183,6 +202,8 @@ class Connection:
     def call(self, method, path, **kwargs):
         """Execute an HTTP call, reconnecting once on failure."""
         self.ensure_connected()
+        old_id = self._instance_id
+        my_generation = self._generation
         fn = getattr(self._client, method)
         try:
             return fn(path, **kwargs)
@@ -193,10 +214,21 @@ class Connection:
             ) from e
         except DosboxError as e:
             if e.status == 401:
-                old_id = self._instance_id
-                self.detach()
-                self._try_connect()
-                new_id = self._instance_id
+                with self._lock:
+                    # If another thread already reconnected on our
+                    # behalf (it hit the same 401 and got the lock
+                    # first), _generation has moved past what we
+                    # observed before the call - reuse its result
+                    # instead of detaching and reattaching again,
+                    # which is what produced a spurious EngineRestarted
+                    # under concurrent load: the second thread would
+                    # otherwise read _instance_id as None (the first
+                    # thread's detach() already cleared it) and compare
+                    # that against the freshly reconnected id.
+                    if self._generation == my_generation:
+                        self.detach()
+                        self._try_connect()
+                    new_id = self._instance_id
                 # Only "both None" is ambiguous (neither side supports
                 # instance_id, so we genuinely cannot tell). Any other
                 # change - including one side None and the other set,

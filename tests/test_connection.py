@@ -2,6 +2,9 @@
 # License: GPL-2.0-or-later. Contact: dosbox-mcp@trinity2k.net
 #
 
+import threading
+import time
+
 import httpx
 import mcp.types as types
 import pytest
@@ -599,6 +602,128 @@ class TestRestartDetection:
         result = guarded({})
         assert result.isError
         assert "dosbox_status" in result.content[0].text
+
+
+class TestConcurrentReattach:
+    """3.7 (anyio.to_thread.run_sync) makes concurrent tool calls run in
+    genuine OS threads instead of nominally-concurrent asyncio tasks a
+    blocking call serializes in practice. Two threads hitting a 401 on
+    the same, never-actually-restarted engine must not race each
+    other's detach()/reconnect into a spurious EngineRestarted."""
+
+    def test_two_concurrent_401s_against_the_same_engine_do_not_spuriously_restart(self):
+        instance_id = "aaaa" * 8
+        info_calls = {"n": 0}
+        calls_lock = threading.Lock()
+
+        def handler(request):
+            if request.url.path == "/api/v1/dosbox/info":
+                with calls_lock:
+                    info_calls["n"] += 1
+                    n = info_calls["n"]
+                if n == 2:
+                    # Stagger the second reattach so it lands while the
+                    # first thread's detach()/_try_connect() is still
+                    # in flight - the exact window the race needs.
+                    time.sleep(0.05)
+                return httpx.Response(200, json={
+                    "version": "0.84-test", "features": {},
+                    "mcp_protocol": "1.0", "instance_id": instance_id,
+                })
+            if request.url.path == "/api/v1/status":
+                time.sleep(0.01)
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            return httpx.Response(404, json={"error": "not found"})
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+
+        barrier = threading.Barrier(2)
+        outcomes = []
+        outcomes_lock = threading.Lock()
+
+        def worker():
+            barrier.wait()
+            try:
+                conn.get("/api/v1/status")
+            except EngineRestarted:
+                with outcomes_lock:
+                    outcomes.append("spurious_restart")
+            except DosboxError:
+                # /status 401s unconditionally in this fixture, so a
+                # clean (non-spurious) second failure after a correct
+                # reattach is the expected outcome, not a test failure.
+                with outcomes_lock:
+                    outcomes.append("dosbox_error")
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert outcomes == ["dosbox_error", "dosbox_error"], outcomes
+
+    def test_two_concurrent_401s_against_a_genuinely_restarted_engine_both_see_it(self):
+        # The other half of the same fix: coalescing concurrent
+        # reconnects onto one attempt must not also swallow a real
+        # restart - both threads still need to learn about it.
+        old_id, new_id = "aaaa" * 8, "bbbb" * 8
+        state = {"restarted": False}
+        info_calls = {"n": 0}
+        calls_lock = threading.Lock()
+
+        def handler(request):
+            if request.url.path == "/api/v1/dosbox/info":
+                with calls_lock:
+                    info_calls["n"] += 1
+                    n = info_calls["n"]
+                if n == 1:
+                    return httpx.Response(200, json={
+                        "version": "0.84-test", "features": {},
+                        "mcp_protocol": "1.0", "instance_id": old_id,
+                    })
+                if n == 2:
+                    time.sleep(0.05)
+                return httpx.Response(200, json={
+                    "version": "0.84-test", "features": {},
+                    "mcp_protocol": "1.0", "instance_id": new_id,
+                })
+            if request.url.path == "/api/v1/status":
+                if not state["restarted"]:
+                    state["restarted"] = True
+                time.sleep(0.01)
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            return httpx.Response(404, json={"error": "not found"})
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+
+        barrier = threading.Barrier(2)
+        outcomes = []
+        outcomes_lock = threading.Lock()
+
+        def worker():
+            barrier.wait()
+            try:
+                conn.get("/api/v1/status")
+            except EngineRestarted as e:
+                with outcomes_lock:
+                    outcomes.append((e.old_instance_id, e.new_instance_id))
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert outcomes == [(old_id, new_id), (old_id, new_id)], outcomes
 
 
 class TestTransportErrorHandling:

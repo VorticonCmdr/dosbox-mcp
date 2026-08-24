@@ -4,6 +4,7 @@
 
 import asyncio
 
+import anyio.to_thread
 import mcp.server.stdio
 from mcp.server.lowlevel import Server
 import mcp.types as types
@@ -161,7 +162,18 @@ def build_server(conn, mode: str = "full", manager=None):
         if name not in registry:
             raise ValueError(f"unknown tool: {name}")
         _, handler = registry[name]
-        return handler(arguments or {})
+        # Every handler is sync and makes a blocking httpx call (client.py's
+        # 30s flat timeout). The SDK already dispatches each request as its
+        # own anyio task (see Server.run's task group), but calling a sync
+        # handler inline blocks the single event loop thread underneath all
+        # of them - one slow call (video/frame's mode=rendered waits up to
+        # 2s in the engine) stalls every other in-flight tool call. Running
+        # it in a worker thread instead gives genuine concurrency.
+        # abandon_on_cancel stays False (the default): Connection has no
+        # locking around its own reconnect state, so abandoning a thread
+        # mid-request while a cancelled caller moves on risks a detach()/
+        # _try_connect() still running unobserved against shared state.
+        return await anyio.to_thread.run_sync(handler, arguments or {})
 
     def _registered_tool_names():
         return set(registry.keys())

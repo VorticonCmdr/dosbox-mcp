@@ -399,6 +399,50 @@ def _call(server, name, args):
     return asyncio.run(go())
 
 
+class TestConcurrentDispatch:
+    """3.7: call_tool used to invoke each sync handler inline, blocking
+    the single event loop thread for the full duration of its httpx
+    call. Two tool calls dispatched together must actually overlap,
+    not run back to back."""
+
+    def test_two_slow_calls_dispatched_together_run_concurrently_not_serially(self):
+        import time
+
+        def handler(request):
+            if request.url.path == "/api/v1/dosbox/info":
+                return httpx.Response(200, json={
+                    "version": "0.84-test", "features": {}, "mcp_protocol": "1.0",
+                    "instance_id": "a" * 32,
+                })
+            if request.url.path == "/api/v1/status":
+                time.sleep(0.2)
+                return httpx.Response(200, json={"running": True})
+            return httpx.Response(404, json={"error": "not found"})
+
+        config = Config(base_url="http://127.0.0.1:8386", token="0" * 64)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        server = build_server(conn, mode="full")
+        call_tool_handler = server.request_handlers[types.CallToolRequest]
+
+        async def one_call():
+            req = types.CallToolRequest(
+                method="tools/call",
+                params=types.CallToolRequestParams(name="dosbox_status", arguments={}),
+            )
+            return await call_tool_handler(req)
+
+        async def go():
+            start = time.monotonic()
+            await asyncio.gather(one_call(), one_call(), one_call())
+            return time.monotonic() - start
+
+        elapsed = asyncio.run(go())
+        # Serialized, three 0.2s calls take ~0.6s; concurrent, ~0.2s.
+        # Generous margin for CI jitter without letting a regression
+        # back to serial dispatch pass.
+        assert elapsed < 0.45, f"calls ran serially, not concurrently: {elapsed:.2f}s"
+
+
 class TestGhidraToolsDontNeedAConnection:
     """debug_map_set_base/to_live/to_ghidra/status are pure client-side
     arithmetic - unlike every other tool in this bridge, they must work
