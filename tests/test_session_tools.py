@@ -4,7 +4,7 @@
 
 import json
 
-from dosbox_mcp.tools.session import _shutdown, _status
+from dosbox_mcp.tools.session import _session_info, _shutdown, _status
 
 _STATUS_RESPONSE = {
     "running": True,
@@ -134,3 +134,44 @@ def test_shutdown_posts_the_shutdown_route():
     assert client.last_method == "post"
     assert client.last_path == "/api/v1/dosbox/shutdown"
     assert json.loads(result[0].text) == {"status": "shutting_down"}
+
+
+# ---------------------------------------------------------------------------
+# session_info
+# ---------------------------------------------------------------------------
+
+
+class _FakeInfoClient:
+    def __init__(self, base_url="http://127.0.0.1:8386"):
+        self.base_url = base_url
+
+
+def test_session_info_reports_absent_token_with_no_curl_example():
+    # conftest.py's isolate_token fixture points DOSBOX_TOKEN_FILE at a
+    # nonexistent path and clears DOSBOX_API_TOKEN, so no token is
+    # available here by default.
+    result = _session_info(_FakeInfoClient())
+    body = json.loads(result[0].text)
+
+    assert body["token"] == "absent"
+    assert "example" not in body
+    assert "note" in body
+
+
+def test_session_info_reports_the_token_file_read_token_actually_used(
+        monkeypatch, tmp_path):
+    # Regression: this used to call default_token_path(), which ignores
+    # DOSBOX_TOKEN_FILE - so a token read via the env override still got
+    # reported (and curl-exampled) against the wrong file.
+    token_file = tmp_path / "custom_token"
+    token_file.write_text("s3cr3t", encoding="utf-8")
+    monkeypatch.setenv("DOSBOX_TOKEN_FILE", str(token_file))
+
+    result = _session_info(_FakeInfoClient())
+    body = json.loads(result[0].text)
+
+    assert body["token"] == "present"
+    assert body["token_file"] == str(token_file)
+    assert str(token_file) in body["example"]
+    # The token value itself must never appear - only its file path.
+    assert "s3cr3t" not in json.dumps(body)

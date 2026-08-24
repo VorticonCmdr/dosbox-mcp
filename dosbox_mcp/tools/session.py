@@ -109,11 +109,11 @@ def _shutdown(client):
 
 def _session_info(client):
     import mcp.types as types
-    from dosbox_mcp.config import default_token_path, read_token
+    from dosbox_mcp.config import read_token, resolved_token_path
 
     base_url = client.base_url
     token = read_token()
-    token_path = default_token_path()
+    token_path = resolved_token_path()
 
     # The token value never enters the transcript (design rule,
     # self-audit 2026-07-17). The curl example reads it from the file
