@@ -64,3 +64,12 @@ include = ["dosbox_mcp*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error"]
+
+[tool.ruff.lint]
+# ruff's own bundled default is much wider than this (pylint/tryceratops/
+# bugbear-derived rules included) and picks up new codes on every ruff
+# upgrade. Pin to the classic conservative set - real bugs (syntax errors,
+# undefined names, unused imports), not style opinions - so CI doesn't go
+# red from a ruff version bump instead of a code change. E4/E7/E9/F is
+# already clean; widening this set is a separate, deliberate change.
+select = ["E4", "E7", "E9", "F"]
