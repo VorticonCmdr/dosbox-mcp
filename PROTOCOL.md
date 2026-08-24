@@ -55,6 +55,28 @@ protocol peer.
   bridge sends `X-Client: mcp`). Engines may use it to drive on-screen
   activity indicators; they must not grant anything based on it.
 
+### Instance identity (since 1.13.0)
+
+A 401 mid-session is ambiguous: it could be a stale token on the
+process the client already attached to (safe to reattach and replay
+the request), or it could mean a different process is now answering at
+the same URL - a restart. Replaying a mutating request (an input
+sequence, a memory write) into a fresh guest session is worse than
+surfacing an error, since every piece of session state the old process
+held (breakpoints, freezes, loaded script, recording) is gone.
+
+Clients should store `dosbox/info`'s `instance_id` at attach and
+compare it after reattaching on a 401. Only "identical on both sides"
+counts as safe to replay - that covers both "unchanged" and "neither
+side ever sent instance_id" (an engine older than 1.13.0, where the
+field is genuinely unavailable and the client cannot tell). Any other
+outcome is a restart: a changed value, or one side having the field
+and the other not - the latter can only happen if the responding
+binary itself changed (a build that gained or lost 1.13.0 support
+across the restart), so its absence-to-presence transition is still
+proof, not an unknown. On a restart, do not replay the failed request;
+treat all previously-known session state as invalid.
+
 
 ## Discovery
 
@@ -82,6 +104,17 @@ The identification payload. Required fields for a protocol peer:
 - `features` (object): capability flags, see below.
 - `mcp_protocol` (string, "major.minor"): the protocol version.
   Absent on pre-1.0-advertisement engines (implicit 1.0 rule).
+
+Optional, since 1.13.0:
+
+- `instance_id` (string, 32 hex chars): identifies the engine process,
+  fresh on every start. A client that stores it at attach and finds a
+  different value after reconnecting knows it is talking to a
+  different process, not a token refresh on the same one - see
+  "Instance identity" below.
+- `pid` (integer), `started_at_unix` (integer, Unix seconds),
+  `uptime_ms` (integer): diagnostics for the same purpose. Absent
+  against an engine older than 1.13.0.
 
 ### Feature flags
 
@@ -669,3 +702,8 @@ changed and the version it produces.
   runs after Content-Type/body/param validation instead of before it,
   so a request that was always going to 415/413/400 no longer burns the
   slot too.
+  Separately, `dosbox/info` gains `instance_id`, `pid`,
+  `started_at_unix` and `uptime_ms` (see "Instance identity" above) so
+  a client can distinguish a stale token on the same engine process
+  from a different process (a restart) answering at the same URL, and
+  avoid replaying a mutating request into a fresh guest session.

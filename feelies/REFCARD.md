@@ -11,7 +11,8 @@ These work whether or not an engine is connected.
 
 - **bridge_status** (read-only) - bridge version, highest protocol it
   implements, connection state, engine version, effective (negotiated)
-  protocol, features, mode, managed instance, token presence. `{}`
+  protocol, the attached engine's instance_id (changes across a
+  restart), features, mode, managed instance, token presence. `{}`
 - **bridge_connect** - attach to the running engine explicitly; reports
   a precise reason on failure. `{}`
 - **bridge_disconnect** - detach; the engine keeps running. `{}`

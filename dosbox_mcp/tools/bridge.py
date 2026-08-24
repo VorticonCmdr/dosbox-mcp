@@ -140,7 +140,9 @@ def register(server, conn, add_tool, manager, mode):
             "Bridge and connection state: bridge version, the highest "
             "protocol it implements, engine version, effective "
             "(negotiated) protocol, enabled features, capability mode, "
-            "managed instance, token presence (never the value)."
+            "the attached engine's instance_id (changes across a "
+            "restart), managed instance, token presence (never the "
+            "value)."
         ),
         risk="read",
         title="Bridge Status",

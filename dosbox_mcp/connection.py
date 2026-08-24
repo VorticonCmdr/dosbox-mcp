@@ -37,6 +37,12 @@ class Connection:
         self._capabilities: dict = {}
         self._engine_info: dict = {}
         self._effective: tuple[int, int] | None = None
+        # Identifies the engine process behind the last successful
+        # attach (None against an engine that predates 3.6, or before
+        # the first attach). Used to tell a genuinely stale token apart
+        # from the token now belonging to a different process - see
+        # EngineRestarted.
+        self._instance_id: str | None = None
 
     @property
     def config(self) -> Config:
@@ -81,6 +87,7 @@ class Connection:
             "base_url": self.base_url,
             "engine_name": self._engine_info.get("name"),
             "engine_version": self._engine_info.get("version"),
+            "instance_id": self._instance_id,
             "protocol": self.effective_protocol,
             "features": dict(self._features),
             "capabilities": dict(self._capabilities),
@@ -156,6 +163,7 @@ class Connection:
         self._features = info.get("features", {})
         self._capabilities = info.get("capabilities", {})
         self._effective = effective
+        self._instance_id = info.get("instance_id")
         log.info("attached to %s (%s, protocol %s)", self._config.base_url,
                  info.get("version", "?"), self.effective_protocol)
 
@@ -169,6 +177,7 @@ class Connection:
         self._capabilities = {}
         self._engine_info = {}
         self._effective = None
+        self._instance_id = None
         log.info("detached from dosbox")
 
     def call(self, method, path, **kwargs):
@@ -184,8 +193,22 @@ class Connection:
             ) from e
         except DosboxError as e:
             if e.status == 401:
+                old_id = self._instance_id
                 self.detach()
                 self._try_connect()
+                new_id = self._instance_id
+                # Only "both None" is ambiguous (neither side supports
+                # instance_id, so we genuinely cannot tell). Any other
+                # change - including one side None and the other set,
+                # which can only happen if the responding binary
+                # changed - is a restart signal: the 401 was not a
+                # stale token on the same process, it was a different
+                # process behind the same URL. Replaying a mutating
+                # request into a fresh guest session is worse than
+                # surfacing the restart, so don't retry the call at all.
+                if (old_id is not None or new_id is not None) \
+                        and old_id != new_id:
+                    raise EngineRestarted(old_id, new_id) from e
                 fn = getattr(self._client, method)
                 return fn(path, **kwargs)
             raise
@@ -208,6 +231,28 @@ class Connection:
 
 class NotConnected(Exception):
     pass
+
+
+class EngineRestarted(Exception):
+    """Raised instead of replaying a request when a mid-call 401 turns
+    out to be a different engine process (a restart), not a stale
+    token on the same one. Everything the old process held - freeze
+    registry, loaded script, breakpoints, guest state - is gone; the
+    caller must not assume the request it was making ran.
+
+    Either id can be None: that means the engine on that side of the
+    restart predates 3.6 and never sent instance_id at all - still a
+    provable restart, since a running process's support for the field
+    cannot change without the binary itself changing."""
+
+    def __init__(self, old_instance_id: str | None, new_instance_id: str | None):
+        super().__init__(
+            f"engine restarted (was {old_instance_id or 'unknown, pre-3.6 engine'}, "
+            f"now {new_instance_id or 'unknown, pre-3.6 engine'}) - "
+            "the request was not retried"
+        )
+        self.old_instance_id = old_instance_id
+        self.new_instance_id = new_instance_id
 
 
 def _hint_for(code: str | None, retryable: bool) -> str | None:
@@ -285,6 +330,13 @@ def guard(connection: Connection, handler, feature=None, tool_name=None):
             return handler(args)
         except NotConnected as e:
             return to_error_result(str(e), tool=tool_name, code="not_connected")
+        except EngineRestarted as e:
+            return to_error_result(
+                f"{e} - guest state (breakpoints, freezes, loaded "
+                "script, recording) is gone; call bridge_status or "
+                "dosbox_status before continuing.",
+                tool=tool_name, code="engine_restarted",
+            )
         except DosboxError as e:
             return to_error_result(e.message, tool=tool_name, route=e.route,
                                    code=e.code, retryable=e.retryable,

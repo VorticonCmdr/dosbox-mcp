@@ -8,7 +8,7 @@ import pytest
 
 from dosbox_mcp.client import DosboxClient, DosboxError
 from dosbox_mcp.config import Config
-from dosbox_mcp.connection import Connection, NotConnected, guard
+from dosbox_mcp.connection import Connection, EngineRestarted, NotConnected, guard
 
 
 TOKEN = "0" * 64
@@ -278,6 +278,21 @@ class TestStatus:
         conn.ensure_connected()
         assert TOKEN not in repr(conn.status())
 
+    def test_status_reports_instance_id(self):
+        conn = _connectable({"features": {}, "mcp_protocol": "1.0",
+                             "instance_id": "a" * 32})
+        conn.ensure_connected()
+        assert conn.status()["instance_id"] == "a" * 32
+
+    def test_status_instance_id_is_none_against_an_engine_that_predates_3_6(self):
+        conn = _connectable({"features": {}, "mcp_protocol": "1.0"})
+        conn.ensure_connected()
+        assert conn.status()["instance_id"] is None
+
+    def test_status_instance_id_is_none_while_disconnected(self):
+        conn = _make_conn()
+        assert conn.status()["instance_id"] is None
+
 
 class TestStaleTokenRetry:
     def test_retries_on_status_not_message_substring(self, tmp_path, monkeypatch):
@@ -329,6 +344,261 @@ class TestStaleTokenRetry:
         with pytest.raises(NotConnected):
             conn.ensure_connected()
         assert len(calls) == 1
+
+
+class TestRestartDetection:
+    """3.6: a mid-call 401 can mean either a stale token on the same
+    engine process (replay is safe) or a different process behind the
+    same URL, i.e. a restart (replay would run a mutating request
+    against a fresh guest session - worse than an error)."""
+
+    def _restart_transport(self, old_token, new_token, token_file, *,
+                           old_instance="aaaa" * 8, new_instance="bbbb" * 8):
+        # The first request to any authenticated path other than the
+        # initial /info attach 401s once (simulating the restart);
+        # after that, both /info and the retried path key their
+        # response on which token the caller now presents.
+        state = {"restarted": False}
+
+        def handler(request):
+            auth = request.headers.get("authorization")
+            path = request.url.path
+            if path == "/api/v1/dosbox/info":
+                if not state["restarted"] and auth == f"Bearer {old_token}":
+                    return httpx.Response(200, json={
+                        "version": "0.84-test", "features": {},
+                        "mcp_protocol": "1.0", "instance_id": old_instance,
+                    })
+                if state["restarted"] and auth == f"Bearer {new_token}":
+                    return httpx.Response(200, json={
+                        "version": "0.84-test", "features": {},
+                        "mcp_protocol": "1.0", "instance_id": new_instance,
+                    })
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            if not state["restarted"]:
+                state["restarted"] = True
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            if auth == f"Bearer {new_token}":
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(401, json={
+                "error": "unauthorized", "error_code": "unauthorized",
+            })
+
+        return httpx.MockTransport(handler)
+
+    def test_call_raises_engine_restarted_when_the_instance_id_changes(
+            self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        old_token, new_token = "0" * 64, "1" * 64
+        token_file = tmp_path / "api_token"
+        token_file.write_text(new_token)
+
+        config = Config(base_url="http://127.0.0.1:8386", token=old_token,
+                        token_file=token_file)
+        conn = Connection(config, transport=self._restart_transport(
+            old_token, new_token, token_file))
+        conn.ensure_connected()
+        assert conn.status()["instance_id"] == "aaaa" * 8
+
+        with pytest.raises(EngineRestarted) as exc_info:
+            conn.get("/api/v1/status")
+        assert exc_info.value.old_instance_id == "aaaa" * 8
+        assert exc_info.value.new_instance_id == "bbbb" * 8
+        # The failed call was not silently retried into success.
+        assert conn.status()["instance_id"] == "bbbb" * 8
+
+    def test_guard_turns_engine_restarted_into_an_error_result(
+            self, tmp_path, monkeypatch):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        old_token, new_token = "0" * 64, "1" * 64
+        token_file = tmp_path / "api_token"
+        token_file.write_text(new_token)
+
+        config = Config(base_url="http://127.0.0.1:8386", token=old_token,
+                        token_file=token_file)
+        conn = Connection(config, transport=self._restart_transport(
+            old_token, new_token, token_file))
+        conn.ensure_connected()
+
+        guarded = guard(conn, lambda args: conn.get("/api/v1/status"),
+                        tool_name="dosbox_status")
+        result = guarded({})
+        assert result.isError
+        text = result.content[0].text
+        assert "engine_restarted" not in text  # code, not echoed in text
+        assert "restarted" in text
+        assert "dosbox_status" in text
+
+    def test_same_instance_id_across_reattach_still_replays_normally(self):
+        # No restart: same process, same instance_id both times - the
+        # pre-3.6 stale-token-retry behavior must be unchanged.
+        calls = []
+
+        def handler(request):
+            auth = request.headers.get("authorization")
+            calls.append((request.url.path, auth))
+            if request.url.path == "/api/v1/dosbox/info":
+                return httpx.Response(200, json={
+                    "version": "0.84-test", "features": {},
+                    "mcp_protocol": "1.0", "instance_id": "same" * 8,
+                })
+            if len(calls) == 2:  # first hit on /status: simulate a stale token
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            return httpx.Response(200, json={"ok": True})
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+
+        result = conn.get("/api/v1/status")
+        assert result == {"ok": True}
+
+    def test_no_restart_detection_against_an_engine_that_predates_3_6(self):
+        # Neither info response carries instance_id - both stay None,
+        # so the "different id" check never fires and the pre-3.6
+        # replay-on-401 behavior is preserved for older engines.
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if request.url.path == "/api/v1/dosbox/info":
+                return httpx.Response(200, json={
+                    "version": "0.84-da2", "features": {}, "mcp_protocol": "1.0",
+                })
+            if calls.count("/api/v1/status") == 1:
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            return httpx.Response(200, json={"ok": True})
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+
+        assert conn.get("/api/v1/status") == {"ok": True}
+
+    def test_engine_restarted_when_instance_id_appears_across_the_boundary(self):
+        # An engine straddling the 1.13.0 boundary (upgraded and
+        # restarted) is still a restart even though the *old* side has
+        # no instance_id to compare against: the field going from
+        # absent to present can only happen if the responding binary
+        # changed.
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if request.url.path == "/api/v1/dosbox/info":
+                if len(calls) == 1:  # initial attach: pre-3.6 engine
+                    return httpx.Response(200, json={
+                        "version": "0.84-da2", "features": {}, "mcp_protocol": "1.0",
+                    })
+                return httpx.Response(200, json={  # reattach: upgraded engine
+                    "version": "0.84-da3", "features": {}, "mcp_protocol": "1.0",
+                    "instance_id": "cccc" * 8,
+                })
+            if calls.count("/api/v1/status") == 1:
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            return httpx.Response(200, json={"ok": True})
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+        assert conn.status()["instance_id"] is None
+
+        with pytest.raises(EngineRestarted) as exc_info:
+            conn.get("/api/v1/status")
+        assert exc_info.value.old_instance_id is None
+        assert exc_info.value.new_instance_id == "cccc" * 8
+
+    def test_engine_restarted_when_instance_id_disappears_across_the_boundary(self):
+        # Symmetric case: a downgrade/rollback to a pre-3.6 build.
+        calls = []
+
+        def handler(request):
+            calls.append(request.url.path)
+            if request.url.path == "/api/v1/dosbox/info":
+                if len(calls) == 1:  # initial attach: 3.6+ engine
+                    return httpx.Response(200, json={
+                        "version": "0.84-da3", "features": {}, "mcp_protocol": "1.0",
+                        "instance_id": "dddd" * 8,
+                    })
+                return httpx.Response(200, json={  # reattach: rolled back
+                    "version": "0.84-da2", "features": {}, "mcp_protocol": "1.0",
+                })
+            if calls.count("/api/v1/status") == 1:
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            return httpx.Response(200, json={"ok": True})
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+        assert conn.status()["instance_id"] == "dddd" * 8
+
+        with pytest.raises(EngineRestarted) as exc_info:
+            conn.get("/api/v1/status")
+        assert exc_info.value.old_instance_id == "dddd" * 8
+        assert exc_info.value.new_instance_id is None
+
+    def _make_stale_then_tokenless_conn(self, tmp_path, monkeypatch):
+        # A connected Connection whose remembered token has just gone
+        # bad (simulating a restart with a fresh token) and whose
+        # token file is also gone by the time the reattach falls back
+        # to it - the reattach has nothing left to try.
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        token_file = tmp_path / "api_token"
+        token_file.write_text(TOKEN)
+        state = {"stale": False}
+
+        def handler(request):
+            auth = request.headers.get("authorization")
+            if request.url.path == "/api/v1/dosbox/info":
+                if not state["stale"] and auth == f"Bearer {TOKEN}":
+                    return httpx.Response(200, json={
+                        "version": "0.84-test", "features": {}, "mcp_protocol": "1.0",
+                    })
+                return httpx.Response(401, json={
+                    "error": "unauthorized", "error_code": "unauthorized",
+                })
+            state["stale"] = True
+            return httpx.Response(401, json={
+                "error": "unauthorized", "error_code": "unauthorized",
+            })
+
+        config = Config(base_url="http://127.0.0.1:8386", token=TOKEN,
+                        token_file=token_file)
+        conn = Connection(config, transport=httpx.MockTransport(handler))
+        conn.ensure_connected()
+        token_file.unlink()  # the reattach's fallback will find nothing
+        return conn
+
+    def test_reattach_failing_for_lack_of_a_token_still_surfaces_as_not_connected(
+            self, tmp_path, monkeypatch):
+        # If the 401-triggered reattach inside call() can't find any
+        # token at all, _try_connect() raises NotConnected from inside
+        # call()'s except block. That must propagate as NotConnected,
+        # not get swallowed or turned into something confusing.
+        conn = self._make_stale_then_tokenless_conn(tmp_path, monkeypatch)
+        with pytest.raises(NotConnected):
+            conn.get("/api/v1/status")
+
+    def test_guard_turns_that_not_connected_into_a_clean_error_result(
+            self, tmp_path, monkeypatch):
+        conn = self._make_stale_then_tokenless_conn(tmp_path, monkeypatch)
+        guarded = guard(conn, lambda args: conn.get("/api/v1/status"),
+                        tool_name="dosbox_status")
+        result = guarded({})
+        assert result.isError
+        assert "dosbox_status" in result.content[0].text
 
 
 class TestTransportErrorHandling:
