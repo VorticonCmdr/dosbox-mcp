@@ -98,14 +98,18 @@ behavior - a client that has never heard of scopes still gets a
 well-formed, already-documented error shape on the rare request that
 hits one.
 
-Scoping covers the REST API only. A script running under `script/load`/
-`script/start` executes on the engine's own emulation thread and
-reaches memory, input, and capture directly, never through an HTTP
-request - no scope check applies to what it does once running. The
-`script` scope is therefore equivalent to granting write, input, media,
-debug, and control together; a client presenting a scope list to an
-operator should say so rather than implying `script` alone is a narrow
-grant.
+A script running under `script/load`/`script/start` executes on the
+engine's own emulation thread and reaches memory, input, and capture
+directly, never through an HTTP request - so a conforming engine holds
+a running script to the same grant its guest-reaching functions'
+REST equivalents would require (dosbox-automation: each `dosbox.*`
+call that touches memory, input, screen/capture, or drive locking
+checks the scope its matching route would, before doing anything).
+`script` alone only permits loading and starting a script, not what it
+does once running; a client presenting a scope list to an operator
+should not imply otherwise. Host-only script functions with no guest
+effect (dosbox-automation: `osd`, `log`, `debugmsg`, `abort`) are never
+gated by any scope.
 
 ## Discovery
 
@@ -753,7 +757,9 @@ changed and the version it produces.
   Swagger UI), so widening one can never accidentally widen the other.
 - **1.14.1 (draft)** - documents optional engine-side token scoping
   (dosbox-automation: `webserver_token_scopes`) and the
-  `insufficient_scope` error code it can produce. Not a minor: no route,
-  field, or negotiable behavior is added - a client that already treats
-  `error_code` as opaque needs no changes to interoperate with an engine
-  that has this configured.
+  `insufficient_scope` error code it can produce, including that a
+  conforming engine holds a running script to the same grant as its
+  REST equivalents rather than treating `script` as a blanket grant.
+  Not a minor: no route, field, or negotiable behavior is added - a
+  client that already treats `error_code` as opaque needs no changes to
+  interoperate with an engine that has this configured.
