@@ -78,6 +78,35 @@ proof, not an unknown. On a restart, do not replay the failed request;
 treat all previously-known session state as invalid.
 
 
+### Token scopes (optional, engine-side configuration)
+
+A conforming engine issues one bearer token per instance with no
+scoping by default - that token can do everything the API surface
+allows. An engine may additionally support restricting what that token
+can do via engine-local configuration (dosbox-automation:
+`webserver_token_scopes`, unset by default): read, write, input,
+script, media, debug, control. This is not a wire negotiation - a
+client cannot ask for a scope and does not need to know the vocabulary
+to interoperate. It only needs to handle one addition to the existing
+error shape: a request the token is not scoped for gets HTTP 403 with
+`error_code: "insufficient_scope"`, the same shape every other error
+already uses. A client that already treats `error_code` as an opaque
+string (the general recommendation throughout this document) handles
+this correctly with no changes. Not assigned its own protocol minor:
+it adds no route, no field to any success response, and no negotiable
+behavior - a client that has never heard of scopes still gets a
+well-formed, already-documented error shape on the rare request that
+hits one.
+
+Scoping covers the REST API only. A script running under `script/load`/
+`script/start` executes on the engine's own emulation thread and
+reaches memory, input, and capture directly, never through an HTTP
+request - no scope check applies to what it does once running. The
+`script` scope is therefore equivalent to granting write, input, media,
+debug, and control together; a client presenting a scope list to an
+operator should say so rather than implying `script` alone is a narrow
+grant.
+
 ## Discovery
 
 ### GET /api/v1/hello (unauthenticated)
@@ -722,3 +751,9 @@ changed and the version it produces.
   kept deliberately apart from the unrelated allowlist that exempts the
   documentation assets (landing page, `openapi.json`, the vendored
   Swagger UI), so widening one can never accidentally widen the other.
+- **1.14.1 (draft)** - documents optional engine-side token scoping
+  (dosbox-automation: `webserver_token_scopes`) and the
+  `insufficient_scope` error code it can produce. Not a minor: no route,
+  field, or negotiable behavior is added - a client that already treats
+  `error_code` as opaque needs no changes to interoperate with an engine
+  that has this configured.
