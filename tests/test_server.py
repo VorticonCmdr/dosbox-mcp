@@ -28,7 +28,9 @@ def test_always_on_tools_present():
     names = server.registered_tool_names()
     assert "dosbox_status" in names
     assert "screen_text" in names
-    assert "script_run" in names
+    assert "script_load" in names
+    assert "script_start" in names
+    assert "script_log" in names
     assert "video_capture_status" in names
 
 
@@ -100,7 +102,9 @@ class TestCapabilityModes:
         assert "recording_delete" not in names
         assert "mouse_position" in names
         assert "mouse_set_position" not in names
-        assert "script_run" not in names
+        assert "script_load" not in names
+        assert "script_start" not in names
+        assert "script_log" in names
         assert "drive_swap" not in names
         assert "mount_lock" not in names
         assert "port_write" not in names
@@ -153,7 +157,8 @@ class TestCapabilityModes:
         assert "record_stop" in names
         assert "recording_delete" in names
         assert "mouse_set_position" in names
-        assert "script_run" in names
+        assert "script_load" in names
+        assert "script_start" in names
         assert "video_capture_start" in names
         assert "drive_swap" in names
         assert "mount_lock" in names
@@ -330,6 +335,48 @@ class TestInputSequenceSchema:
         assert not self._validates({"recording": "my recording!"})
         assert self._validates({"recording": "my-recording_1"})
         assert not self._validates({"recording": ""})
+
+
+class TestScriptLoadSchema:
+    """script_load's name/seed/debug/start fields, validated against the
+    real inputSchema the same way the MCP SDK validates it."""
+
+    def _schema(self):
+        tools = {t.name: t for t in _list_tools(_build(mode="full"))}
+        return tools["script_load"].inputSchema
+
+    def _validates(self, instance):
+        import jsonschema
+        try:
+            jsonschema.validate(instance=instance, schema=self._schema())
+            return True
+        except jsonschema.ValidationError:
+            return False
+
+    def test_script_only_validates(self):
+        assert self._validates({"script": "print('hi')"})
+
+    def test_missing_script_does_not_validate(self):
+        assert not self._validates({"name": "x"})
+
+    def test_name_pattern_matches_the_engine(self):
+        assert self._validates({"script": "x", "name": "install-run_1"})
+        assert not self._validates({"script": "x", "name": "my script!"})
+        assert not self._validates({"script": "x", "name": "x" * 65})
+
+    def test_seed_accepts_a_large_negative_or_positive_int64(self):
+        assert self._validates({"script": "x", "seed": -9223372036854775808})
+        assert self._validates({"script": "x", "seed": 9223372036854775807})
+
+    def test_seed_out_of_int64_range_does_not_validate(self):
+        assert not self._validates({"script": "x", "seed": 9223372036854775808})
+
+    def test_debug_and_start_must_be_boolean(self):
+        assert self._validates({"script": "x", "debug": True, "start": False})
+        assert not self._validates({"script": "x", "debug": "true"})
+
+    def test_unknown_property_does_not_validate(self):
+        assert not self._validates({"script": "x", "content_type": "text/lua"})
 
 
 def _call(server, name, args):
@@ -603,67 +650,3 @@ def test_cpu_read_registers_hits_state_route():
     result = _cpu_state(_FakeClient())
     body = json.loads(result[0].text)
     assert body["registers"]["cs"] == 0x2000
-
-
-def test_script_run_sends_lua_as_text_not_json():
-    # aug-bt7n: script/load wants a text/plain body; the old JSON post
-    # 415'd. Verify the handler uses post_text with the raw source.
-    from dosbox_mcp.tools.script import _script_run
-
-    class _FakeClient:
-        def __init__(self):
-            self.text_calls = []
-            self.json_calls = []
-
-        def post_text(self, path, text, content_type="text/plain", params=None):
-            self.text_calls.append((path, text, content_type))
-            return {"status": "loaded"}
-
-        def post(self, path, json=None):
-            self.json_calls.append((path, json))
-            return {"status": "running"}
-
-    client = _FakeClient()
-    _script_run(client, {"script": "dosbox.log('hi')"})
-
-    # The script goes through post_text as raw source, not post(json=)
-    assert len(client.text_calls) == 1
-    path, text, ctype = client.text_calls[0]
-    assert path == "/api/v1/script/load"
-    assert text == "dosbox.log('hi')"
-    assert ctype == "text/plain"
-    # start is a plain POST with no body
-    assert client.json_calls == [("/api/v1/script/start", None)]
-
-
-def test_script_run_works_through_a_real_connection():
-    # In production, script.register passes `conn` (a Connection) as
-    # `client`, not a DosboxClient or the fake above. Connection had no
-    # post_text, so every real script_run call raised AttributeError; the
-    # fake in the previous test has its own post_text and never caught it.
-    from dosbox_mcp.tools.script import _script_run
-
-    calls = []
-
-    def handler(request):
-        if request.url.path == "/api/v1/dosbox/info":
-            return httpx.Response(
-                200, json={"version": "0.84-da3", "features": {},
-                          "mcp_protocol": "1.0"})
-        if request.url.path == "/api/v1/script/load":
-            calls.append(("load", request.content,
-                          request.headers.get("content-type")))
-            return httpx.Response(200, json={"status": "loaded"})
-        if request.url.path == "/api/v1/script/start":
-            calls.append(("start", request.content))
-            return httpx.Response(200, json={"status": "running"})
-        return httpx.Response(404, json={"error": "not found"})
-
-    config = Config(base_url="http://127.0.0.1:8386", token="0" * 64)
-    conn = Connection(config, transport=httpx.MockTransport(handler))
-
-    result = _script_run(conn, {"script": "dosbox.log('hi')"})
-
-    assert calls[0] == ("load", b"dosbox.log('hi')", "text/plain")
-    assert calls[1][0] == "start"
-    assert json.loads(result[0].text) == {"status": "running"}

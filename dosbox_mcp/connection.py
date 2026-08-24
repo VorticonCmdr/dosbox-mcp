@@ -226,7 +226,8 @@ def _hint_for(code: str | None, retryable: bool) -> str | None:
 
 def to_error_result(message: str, *, tool: str | None = None,
                     route: str | None = None, code: str | None = None,
-                    retryable: bool = False) -> types.CallToolResult:
+                    retryable: bool = False,
+                    retry_after: str | None = None) -> types.CallToolResult:
     """Build a CallToolResult(isError=True). This is the only way to get
     isError set at all: the MCP SDK's call_tool wrapper hardcodes
     isError=False for any handler return value that is not already a
@@ -240,9 +241,15 @@ def to_error_result(message: str, *, tool: str | None = None,
     bits = [b for b in (tool, route) if b]
     prefix = f"[{' '.join(bits)}] " if bits else ""
     text = f"{prefix}{message}"
-    hint = _hint_for(code, retryable)
-    if hint:
-        text = f"{text} {hint}"
+    if retry_after:
+        # More specific than the generic retryable hint below, so it
+        # replaces rather than joins it: "may be transient" is a much
+        # weaker signal than an exact wait time from the server itself.
+        text = f"{text} Retry after {retry_after}s."
+    else:
+        hint = _hint_for(code, retryable)
+        if hint:
+            text = f"{text} {hint}"
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
         isError=True,
@@ -280,5 +287,6 @@ def guard(connection: Connection, handler, feature=None, tool_name=None):
             return to_error_result(str(e), tool=tool_name, code="not_connected")
         except DosboxError as e:
             return to_error_result(e.message, tool=tool_name, route=e.route,
-                                   code=e.code, retryable=e.retryable)
+                                   code=e.code, retryable=e.retryable,
+                                   retry_after=e.retry_after)
     return guarded

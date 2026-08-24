@@ -126,9 +126,10 @@ A typical session, in the agent's words:
    is still a `mouse_button` event pair via `input_sequence`.
 6. `drive_swap` - when an installer prompts for the next disk, swap it
    in without leaving the loop above.
-7. `script_run` - for anything fiddly, run a small sandboxed Lua
-   script in the engine. This is the escape hatch: whatever no
-   dedicated tool covers, a script can usually do.
+7. `script_load` - for anything fiddly, run a small sandboxed Lua
+   script in the engine (starts it immediately unless `start:false`).
+   This is the escape hatch: whatever no dedicated tool covers, a
+   script can usually do.
 
 Reading and typing in a loop is most of it. Watch the screen, decide,
 press a key, watch again.
@@ -293,7 +294,7 @@ while true do
 end
 ```
 
-Run it with `script_run`, then poll `script_status` periodically -
+Run it with `script_load`, then poll `script_status` periodically -
 `output.hits` is readable live while the script is still `running`,
 not just after it finishes. When you see a new entry, call
 `screen_capture` right away to grab a frame near that moment, and
@@ -318,7 +319,7 @@ Three things about this approach that aren't obvious from the API:
   real playtime, then the script stops with `"instruction limit
   exceeded"` in `script_status`'s `error` field - `output.hits`
   collected up to that point is still there, it just won't grow
-  further until you `script_run` again.
+  further until you `script_load` again.
 - **Timing isn't exact.** The script can yield its own coroutine but
   it can't halt guest CPU execution the way a real breakpoint does -
   the game keeps running between the frame that changed and whenever

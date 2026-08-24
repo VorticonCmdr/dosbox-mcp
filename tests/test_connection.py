@@ -386,6 +386,32 @@ class TestDosboxErrorThroughGuard:
         assert result.isError
         assert "retry" in result.content[0].text.lower()
 
+    def test_guard_quotes_retry_after_for_a_429(self):
+        conn = _make_conn(token=TOKEN, features={})
+
+        def handler(args):
+            raise DosboxError(429, "unknown", "too many requests",
+                              retry_after="2")
+
+        guarded = guard(conn, handler, tool_name="script_load")
+        result = guarded({})
+        assert result.isError
+        text = result.content[0].text
+        assert "Retry after 2s" in text
+
+    def test_retry_after_takes_priority_over_the_generic_retryable_hint(self):
+        conn = _make_conn(token=TOKEN, features={})
+
+        def handler(args):
+            raise DosboxError(429, "unknown", "too many requests",
+                              retryable=True, retry_after="2")
+
+        guarded = guard(conn, handler)
+        result = guarded({})
+        text = result.content[0].text
+        assert "Retry after 2s" in text
+        assert "may be transient" not in text
+
     def test_a_401_that_persists_through_reconnect_still_surfaces_as_an_error(self):
         # call() detaches and retries once on 401 (Connection.call);
         # that retry goes through ensure_connected() -> _try_connect(),

@@ -144,10 +144,17 @@ address - anchoring absorbs that automatically.
 
 ## Scripts (the escape hatch)
 
-- **script_run** - load and run sandboxed Lua in the engine. Anything
-  without a dedicated tool can usually be done here.
+- **script_load** - load sandboxed Lua and start it immediately unless
+  `start:false`. Anything without a dedicated tool can usually be done
+  here. `name`/`seed`/`debug` tag the run, fix `math.random()`, and
+  turn on a trace log (see script_log). Rejected while a script is
+  already running; rate-limited to one load per 2 seconds.
   `{"script": "dosbox.type('hello')"}`
-- **script_status** (read-only) - script state and its output table.
+- **script_start** - start a script loaded with `start:false`. `{}`
+- **script_status** (read-only) - script state, its output table, and
+  `log_path` if a debug log is active. `{}`
+- **script_log** (read-only) - tail (last 64 KB) of the current debug
+  log; refused unless the loaded script was loaded with `debug:true`.
   `{}`
 - **script_stop** - stop the running script. `{}`
 

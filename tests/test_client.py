@@ -140,6 +140,33 @@ def test_error_status_with_non_json_body_falls_back_to_raw_text():
     assert e.message == "Bad Gateway"
 
 
+def test_429_captures_the_retry_after_header():
+    # script/load's rate limiter (lua_bridge_commands.cpp) sends this on
+    # every 429 - whole seconds, rounded up, no {error_code, retryable}.
+    def handler(request):
+        return httpx.Response(429, json={"error": "too many requests"},
+                              headers={"Retry-After": "2"})
+
+    client = make_client(handler)
+    with pytest.raises(DosboxError) as exc_info:
+        client.post_text("/api/v1/script/load", "print(1)")
+
+    e = exc_info.value
+    assert e.status == 429
+    assert e.retry_after == "2"
+
+
+def test_error_without_a_retry_after_header_leaves_it_none():
+    def handler(request):
+        return httpx.Response(400, json={"error": "bad"})
+
+    client = make_client(handler)
+    with pytest.raises(DosboxError) as exc_info:
+        client.get("/api/v1/status")
+
+    assert exc_info.value.retry_after is None
+
+
 def test_per_call_timeout_override_actually_overrides():
     # Required by 1.8 (server-side wait): a caller doing a long poll
     # needs a longer client-side timeout than the 30s default without

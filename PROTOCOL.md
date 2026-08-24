@@ -116,14 +116,15 @@ verify the advertised contract against it.
 | session | `status`, `program/state`, `dosbox/info`, `dosbox/shutdown` | machine and program state; shutdown is irreversible |
 | screen | `video/frame`, `video/frame/info`, `video/text` | frame capture (clean emulator output) and text-mode screen reading |
 | capture | `capture/video/start`, `capture/video/stop`, `capture/video/status` | video recording control; status reports path, frames, elapsed time and bytes written |
-| input | `input/sequence`, `input/type`, `input/replay/status` GET, `input/replay` DELETE, `input/record/start` POST, `input/record/pause` POST, `input/record/stop` POST, `input/record/status` GET, `input/recordings` GET, `input/recordings/{name}` DELETE | named-key sequences; paced string typing; replay progress and cancellation; recording and a named recording store (feature: input) |
+| input | `input/sequence`, `input/type`, `input/replay/status` GET, `input/replay` DELETE, `input/record/start` POST, `input/record/pause` POST, `input/record/stop` POST, `input/record/status` GET, `input/recordings` GET, `input/recordings/{name}` DELETE, `input/mouse` GET/POST | named-key sequences; paced string typing; replay progress and cancellation; recording and a named recording store; DOS mouse driver cursor read/warp (feature: input) |
 | memory | `memory/{offset}/{length}` GET, `memory/{segment}/{offset}/{length}` GET, `memory/{offset}` PUT, `memory/{segment}/{offset}` PUT, `memory/search`, `memory/scan`, `memory/snapshot`, `memory/diff`, `memory/allocate` POST, `memory/free` POST, `memory/allocations` GET | guest physical memory (feature: memory) |
 | freeze | `memory/freeze` POST/GET/DELETE | per-frame value locks (feature: freeze) |
 | dos | `dos/internals` | DOS internals incl. the MCB memory map (feature: memory) |
 | cpu | `cpu/register` PUT, `cpu/state` GET | writes (feature: cpu_control), reads (feature: cpu_registers) |
 | io | `io/port` GET/PUT | port I/O (feature: port_io) |
-| script | `script/load`, `script/start`, `script/status`, `script/stop` | sandboxed Lua; `script/load` takes the raw source as a text/plain body |
+| script | `script/load`, `script/start`, `script/status`, `script/stop`, `script/log` GET | sandboxed Lua; `script/load` takes the raw source as a text/plain body; `script/log` tails the debug log from a `debug:true` load |
 | media | `drive` GET, `drive/swap` POST, `mount/lock` GET/POST, `mount/policy` GET, `mount/images` GET | disk drive listing and image swapping; mount policy applies underneath (feature: drive) |
+| batch | `batch` POST | apply up to 64 memory/CPU/port/freeze operations as one uninterleaved pass (feature: batch) |
 
 Semantics that are part of the contract, not just the schemas:
 
@@ -346,6 +347,12 @@ Semantics that are part of the contract, not just the schemas:
   replays through the frame-timed dispatch engine (every recorded
   event carries a `frame`), and is copied, not consumed, on replay -
   the same name can be replayed any number of times.
+- `POST /script/load` is rate-limited to one call per 2 seconds: an
+  attempt inside that window is rejected with 429 and a `Retry-After`
+  header (whole seconds, rounded up) rather than queued or throttled
+  silently. As of 1.13.0 this check runs after Content-Type/body/param
+  validation, so a request that was always going to 415/413/400 for
+  another reason never burns the slot.
 - Validation lives engine-side. The engine is the trust boundary;
   a client talking HTTP directly must be subject to exactly the same
   limits as one going through a bridge.
@@ -632,3 +639,33 @@ changed and the version it produces.
   verbatim as a `/input/sequence` body now fails loudly (400, unknown
   field) instead of silently warping the cursor using host coordinates
   misread as guest ones.
+- **1.13.0 (draft)** - adds `GET /script/log` under the existing
+  `script` group: tails the debug log a `script/load ...&debug=true`
+  request opened, up to the last 64 KB (`{path, truncated, content}` -
+  `truncated` reports whether the head was cut for length, independent
+  of whether `content`'s own last line is complete). Refused (400) when
+  the currently loaded script wasn't loaded with `debug=true`, or when a
+  reload that would have replaced it failed to compile; this gate
+  tracks the currently loaded script, not just whether a log file
+  happens to exist on disk from an earlier run - loading a fresh
+  non-debug script, or a reload that itself fails, drops access to the
+  previous run's log even though the file itself is untouched. Two
+  distinct 404s past that gate: the debug log never opened on the
+  engine side (unwritable/full/read-only logs directory - the load
+  itself still succeeds without one, since debug logging is a
+  diagnostic, not a load precondition), or the file it remembers is no
+  longer readable (removed or permissions changed on disk after the
+  fact). The read is never routed through the request-serialization the
+  rest of this API relies on: the emulation thread holds its own write
+  handle open on the same file for the entire run, so a read landing
+  mid-write can see a torn last line - accepted rather than serializing
+  log reads behind emulation-thread scheduling for what is fundamentally
+  a disk read, not emulator state.
+  `GET /script/status`'s response also gains an optional `log_path`
+  field, present under the same condition as `/script/log`'s
+  availability, naming the same file `/script/log` tails.
+  Also a standalone bug fix, no wire-shape change: `POST /script/load`'s
+  pre-existing 2-second rate limit (see the semantics list above) now
+  runs after Content-Type/body/param validation instead of before it,
+  so a request that was always going to 415/413/400 no longer burns the
+  slot too.

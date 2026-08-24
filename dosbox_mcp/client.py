@@ -21,7 +21,7 @@ class DosboxError(RuntimeError):
 
     def __init__(self, status: int, code: str, message: str,
                 retryable: bool = False, route: str | None = None,
-                body: dict | None = None):
+                body: dict | None = None, retry_after: str | None = None):
         super().__init__(f"{status}: {message}")
         self.status = status
         self.code = code
@@ -29,6 +29,9 @@ class DosboxError(RuntimeError):
         self.retryable = retryable
         self.route = route
         self.body = body if body is not None else {}
+        # Raw Retry-After header value (seconds, as sent) - e.g. 429 from
+        # script/load's rate limiter. None when the response didn't send one.
+        self.retry_after = retry_after
 
 
 class DosboxClient:
@@ -58,7 +61,8 @@ class DosboxClient:
             code = body.get("error_code", "unknown")
             retryable = bool(body.get("retryable", False))
             raise DosboxError(resp.status_code, code, message, retryable,
-                              route=f"{method} {path}", body=body)
+                              route=f"{method} {path}", body=body,
+                              retry_after=resp.headers.get("retry-after"))
         ctype = resp.headers.get("content-type", "")
         if ctype.startswith("application/json"):
             return resp.json()
