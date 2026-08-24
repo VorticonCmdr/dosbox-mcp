@@ -73,6 +73,7 @@ def test_all_tools_registered_regardless_of_features():
     assert "mount_images" in names
     assert "drive_swap" in names
     assert "mount_lock" in names
+    assert "batch_execute" in names
 
 
 class TestCapabilityModes:
@@ -129,6 +130,10 @@ class TestCapabilityModes:
         # the engine, so they survive observe mode too.
         assert "debug_symbols_load" in names
         assert "debug_symbols_status" in names
+        # batch_execute can perform mem_write/cpu_write_register/
+        # port_write/freeze_set - the strictest of its constituent
+        # single ops (all full-mode-only) governs the whole tool.
+        assert "batch_execute" not in names
 
     def test_interact_still_requires_full_for_debug_map_auto(self):
         names = _build(mode="interact").registered_tool_names()
@@ -154,6 +159,7 @@ class TestCapabilityModes:
         assert "mem_snapshot" not in names
         assert "mem_diff" not in names
         assert "debug_step_out" not in names
+        assert "batch_execute" not in names
 
     def test_full_registers_everything(self):
         names = _build(mode="full").registered_tool_names()
@@ -163,6 +169,7 @@ class TestCapabilityModes:
         assert "debug_map_auto" in names
         assert "mem_snapshot" in names
         assert "mem_diff" in names
+        assert "batch_execute" in names
 
     def test_unknown_mode_rejected(self):
         import pytest
@@ -220,13 +227,18 @@ class TestRiskTaxonomy:
 
     def test_non_destructive_mutators_are_not_flagged_destructive(self):
         tools = {t.name: t for t in _list_tools(_build(mode="full"))}
-        for name in ("mem_write", "freeze_set", "input_type", "cpu_write_register"):
+        for name in ("mem_write", "freeze_set", "input_type",
+                     "cpu_write_register", "batch_execute"):
             assert tools[name].annotations.destructiveHint is False, name
 
     def test_idempotent_hints_match_the_documented_examples(self):
         tools = {t.name: t for t in _list_tools(_build(mode="full"))}
         assert tools["mem_write"].annotations.idempotentHint is True
         assert tools["input_type"].annotations.idempotentHint is False
+        # A batch mixing an idempotent op (e.g. mem_write) with a
+        # deliberately non-idempotent one (port_write - see io.py's own
+        # reasoning) can't honestly claim idempotency for the whole call.
+        assert tools["batch_execute"].annotations.idempotentHint is False
 
     def test_mem_snapshot_and_diff_are_not_read_only(self):
         # An adversarial review of this item caught these mislabeled

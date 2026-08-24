@@ -22,8 +22,10 @@ def register_state(server, client, add_tool, feature=None):
     )
 
 
-_REGISTERS = ("eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
-             "cs", "ds", "es", "ss", "fs", "gs")
+# Shared with tools/batch.py's cpu_write op branch - the exact same
+# register set, so the two schemas can't silently drift apart.
+REGISTERS = ("eax", "ebx", "ecx", "edx", "esi", "edi", "esp", "ebp",
+            "cs", "ds", "es", "ss", "fs", "gs")
 
 
 def register(server, client, add_tool, feature=None):
@@ -43,7 +45,7 @@ def register(server, client, add_tool, feature=None):
             "properties": {
                 "register": {
                     "type": "string",
-                    "enum": list(_REGISTERS),
+                    "enum": list(REGISTERS),
                     "description": "Register name: eax, ebx, ecx, edx, esi, edi, esp, ebp, cs, ds, es, ss, fs, gs.",
                 },
                 "value": {

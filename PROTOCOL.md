@@ -567,3 +567,31 @@ changed and the version it produces.
   `recording` field to `POST /input/sequence`'s request body as an
   alternative to `events`, to replay a stored recording by name (404 if
   the name doesn't exist).
+- **1.11.0 (draft)** - adds `POST /batch`, a new `batch` feature flag,
+  and `capabilities.batch` (`max_ops` 64, `max_read_bytes` 1 MiB,
+  `max_write_bytes` 256 KiB, `base_timeout_ms`/`per_op_timeout_ms`/
+  `max_timeout_ms` describing the `250 + 4*ops`, capped at 2000ms,
+  timeout formula). Applies 1-64 memory (`mem_read`/`mem_write`/
+  `mem_cas`), CPU register (`cpu_read`/`cpu_write`), I/O port
+  (`port_read`/`port_write`), and freeze (`freeze_set`/`freeze_clear`)
+  operations in order, in one pass on the emulation thread - no other
+  request can interleave mid-batch, closing the tearing/race gap every
+  other route has when a caller needs more than one operation applied
+  as a unit (e.g. a `mem_cas` lock byte followed by several dependent
+  writes). Not a transaction: there is no rollback, only in-order
+  application and, with the default `on_error: "abort"`, an early stop
+  once one operation fails (`mem_cas` conflict, `freeze_set` registry
+  full, `freeze_clear` not found, or an out-of-range address for
+  `mem_read`/`mem_write`/`mem_cas`/`freeze_set` - re-checked at
+  execution time rather than trusted from validation, since a
+  register-relative address isn't known until then and even a
+  numeric one could in principle go stale between validation and
+  execution - the only failure modes reachable once every operation is
+  otherwise fully validated up front); `on_error: "continue"` applies
+  every operation regardless. Every result is index-correlated with the
+  request's `ops`, including `status: "skipped"` for an operation an
+  abort never reached. `mem_write`/`mem_cas` are kept as separate
+  operations rather than mem_write with an optional CAS field (unlike
+  the single-op `PUT /memory/{offset}` route's `If-Match` header) -
+  there is no per-operation header inside a JSON body, so `mem_cas`
+  spells the same concept out as an explicit `expected` field instead.

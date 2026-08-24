@@ -11,7 +11,7 @@ import mcp.types as types
 from .config import MODES, Config
 from .connection import Connection, guard
 from .lifecycle import InstanceManager
-from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, ghidra, media, script, symbols, wait
+from .tools import bridge, session, screen, input as input_tools, memory, freeze, io, cpu, debug, ghidra, media, script, symbols, wait, batch
 
 # The risk taxonomy every tool declares itself under (add_tool's `risk`
 # param), replacing a single read_only boolean:
@@ -153,6 +153,7 @@ def build_server(conn, mode: str = "full", manager=None):
     cpu.register_state(server, conn, add_tool, feature="cpu_registers")
     debug.register(server, conn, add_tool, feature="debugger",
                    annotate=annotate_fn)
+    batch.register(server, conn, add_tool, feature="batch")
     bridge.register(server, conn, add_tool,
                     manager=manager, mode=mode, get_tools=get_tools)
 
