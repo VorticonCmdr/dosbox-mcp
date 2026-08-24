@@ -6,6 +6,8 @@ import json
 
 from dosbox_mcp.tools.media import (
     _capture_start,
+    _capture_status,
+    _capture_stop,
     _drive_list,
     _drive_swap,
     _mount_images,
@@ -115,3 +117,24 @@ def test_capture_start_forwards_only_the_args_given():
     _capture_start(client, {"compression": 5})
 
     assert client.last_kwargs["json"] == {"compression": 5}
+
+
+def test_capture_stop_posts_with_no_body():
+    client = _FakeClient({"status": "stopped"})
+
+    result = _capture_stop(client)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/capture/video/stop"
+    assert json.loads(result[0].text) == {"status": "stopped"}
+
+
+def test_capture_status_gets_the_status_route():
+    response = {"recording": False, "mode": "raw", "frames": 120}
+    client = _FakeClient(response)
+
+    result = _capture_status(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/capture/video/status"
+    assert json.loads(result[0].text) == response

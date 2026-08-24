@@ -5,7 +5,9 @@
 import json
 
 from dosbox_mcp.tools.input import (
+    _input_key,
     _input_sequence,
+    _input_type,
     _mouse_position,
     _mouse_set_position,
     _record_pause,
@@ -70,6 +72,55 @@ def test_input_sequence_forwards_both_when_both_given():
     _input_sequence(client, {"events": [], "recording": "x"})
 
     assert client.last_kwargs["json"] == {"events": [], "recording": "x"}
+
+
+def test_input_type_posts_text_to_the_type_route():
+    client = _FakeClient({"status": "ok"})
+
+    _input_type(client, {"text": "hello"})
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/input/type"
+    assert client.last_kwargs["json"] == {"text": "hello"}
+
+
+def test_input_type_forwards_cps_when_given():
+    client = _FakeClient({"status": "ok"})
+
+    _input_type(client, {"text": "hi", "cps": 30})
+
+    assert client.last_kwargs["json"] == {"text": "hi", "cps": 30}
+
+
+def test_input_type_omits_cps_when_not_given():
+    client = _FakeClient({"status": "ok"})
+
+    _input_type(client, {"text": "hi"})
+
+    assert "cps" not in client.last_kwargs["json"]
+
+
+def test_input_key_default_press_sends_press_and_release_via_sequence_route():
+    client = _FakeClient({"status": "ok", "events_scheduled": 2})
+
+    _input_key(client, {"key": "KBD_a"})
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/input/sequence"
+    assert client.last_kwargs["json"] == {"events": [
+        {"type": "key", "key": "KBD_a", "pressed": True},
+        {"type": "key", "key": "KBD_a", "pressed": False},
+    ]}
+
+
+def test_input_key_explicit_release_sends_only_the_release_event():
+    client = _FakeClient({"status": "ok", "events_scheduled": 1})
+
+    _input_key(client, {"key": "KBD_a", "pressed": False})
+
+    assert client.last_kwargs["json"] == {"events": [
+        {"type": "key", "key": "KBD_a", "pressed": False},
+    ]}
 
 
 def test_replay_status_gets_the_status_route():

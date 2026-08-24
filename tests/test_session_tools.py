@@ -4,7 +4,7 @@
 
 import json
 
-from dosbox_mcp.tools.session import _status
+from dosbox_mcp.tools.session import _shutdown, _status
 
 _STATUS_RESPONSE = {
     "running": True,
@@ -107,3 +107,30 @@ def test_status_detail_true_includes_the_full_raw_payloads():
     assert body["drives"] == _DRIVE_RESPONSE["drives"]
     assert len(body["drives"]) == 25
     assert body["info"] == _INFO_RESPONSE
+
+
+# ---------------------------------------------------------------------------
+# dosbox_shutdown
+# ---------------------------------------------------------------------------
+
+
+class _FakeShutdownClient:
+    def __init__(self, response):
+        self._response = response
+        self.last_method = None
+        self.last_path = None
+
+    def post(self, path, **kwargs):
+        self.last_method = "post"
+        self.last_path = path
+        return self._response
+
+
+def test_shutdown_posts_the_shutdown_route():
+    client = _FakeShutdownClient({"status": "shutting_down"})
+
+    result = _shutdown(client)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/dosbox/shutdown"
+    assert json.loads(result[0].text) == {"status": "shutting_down"}

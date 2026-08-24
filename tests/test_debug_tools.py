@@ -8,6 +8,8 @@ from dosbox_mcp.tools.debug import (
     _backtrace,
     _breakpoint_add,
     _breakpoint_delete,
+    _breakpoint_list,
+    _continue,
     _disassemble,
     _pause,
     _run_to,
@@ -109,6 +111,16 @@ def test_step_over_posts_with_no_body():
     assert client.last_path == "/api/v1/debug/step_over"
 
 
+def test_continue_posts_with_no_body():
+    client = _FakeClient({"status": "ok", "debugging": False,
+                          "resumed_from_stop_id": 3})
+
+    _continue(client)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/debug/continue"
+
+
 def test_run_to_posts_segment_and_offset_straight_through():
     client = _FakeClient({"status": "ok", "resumed_from_stop_id": 3})
     args = {"segment": 0x1000, "offset": 0x50}
@@ -135,6 +147,16 @@ def test_breakpoint_add_posts_args_straight_through_including_condition_and_igno
     assert client.last_method == "post"
     assert client.last_path == "/api/v1/debug/breakpoints"
     assert client.last_kwargs["json"] == args
+
+
+def test_breakpoint_list_gets_the_breakpoints_route_with_no_body():
+    client = _FakeClient({"breakpoints": [], "count": 0})
+
+    result = _breakpoint_list(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/debug/breakpoints"
+    assert json.loads(result[0].text) == {"breakpoints": [], "count": 0}
 
 
 def test_disassemble_builds_the_path_from_segment_offset_and_count():

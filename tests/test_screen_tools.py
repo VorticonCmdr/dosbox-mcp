@@ -2,11 +2,13 @@
 # License: GPL-2.0-or-later. Contact: dosbox-mcp@trinity2k.net
 #
 
+import json
+
 import jsonschema
 import mcp.types as types
 import pytest
 
-from dosbox_mcp.tools.screen import _screen_capture, _screen_text
+from dosbox_mcp.tools.screen import _screen_capture, _screen_info, _screen_text
 
 
 class _FakeClient:
@@ -311,3 +313,28 @@ def test_schema_rejects_an_out_of_range_png_level():
         jsonschema.validate({"png_level": -1}, _capture_schema())
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"png_level": 10}, _capture_schema())
+
+
+# ---------------------------------------------------------------------------
+# screen_info
+# ---------------------------------------------------------------------------
+
+
+class _FakeInfoClient:
+    def __init__(self, response):
+        self._response = response
+        self.last_path = None
+
+    def get(self, path, **kwargs):
+        self.last_path = path
+        return self._response
+
+
+def test_screen_info_gets_the_frame_info_route():
+    response = {"width": 320, "height": 200, "bpp": 8, "has_palette": True}
+    client = _FakeInfoClient(response)
+
+    result = _screen_info(client)
+
+    assert client.last_path == "/api/v1/video/frame/info"
+    assert json.loads(result[0].text) == response

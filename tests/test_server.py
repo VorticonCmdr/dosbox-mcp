@@ -689,6 +689,7 @@ def test_cpu_read_registers_hits_state_route():
 
     class _FakeClient:
         def get(self, path, params=None, headers=None):
+            assert path == "/api/v1/cpu/state"
             return {"registers": {"cs": 0x2000, "eip": 0x100}}
 
     result = _cpu_state(_FakeClient())
