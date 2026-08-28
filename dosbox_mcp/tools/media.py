@@ -121,12 +121,13 @@ def register_drive(server, client, add_tool, feature=None):
         name="mount_status",
         description=(
             "Whether mounting is locked (mount_lock) and the "
-            "directory/image roots an API-origin mount must be under. "
-            "An empty allowed_image_roots means every drive_swap call "
-            "is refused by policy regardless of path - the "
-            "out-of-the-box state until an operator configures "
+            "directory/image roots an API-origin mount must be under: "
+            "allowed_bases for drive_mount, allowed_image_roots for "
+            "drive_swap. An empty list means every call of that kind is "
+            "refused by policy regardless of path - the out-of-the-box "
+            "state until an operator configures mount_allowed_bases or "
             "mount_allowed_image_roots in the primary config. Check "
-            "this first if drive_swap keeps returning "
+            "this first if drive_mount or drive_swap keeps returning "
             "outside_whitelist."
         ),
         risk="read",
@@ -198,6 +199,57 @@ def register_drive(server, client, add_tool, feature=None):
     )
 
     add_tool(
+        name="drive_mount",
+        description=(
+            "Mount a host directory as a drive letter - the REST "
+            "equivalent of the guest's own MOUNT command, directory "
+            "form only (image files stay on drive_swap). The path must "
+            "resolve under one of mount_status's allowed_bases - an "
+            "operator-configured whitelist, not something this call "
+            "can bypass - and mounting must not be locked "
+            "(mount_lock). On refusal, error_code is one of "
+            "missing_field, invalid_drive_letter, mount_locked, "
+            "not_a_directory, or a mount-policy reason (does_not_resolve, "
+            "symlink_component, system_path, outside_whitelist). "
+            "Mirrors an already-mounted letter the same way MOUNT itself "
+            "does: it overwrites whatever was there, no unmount required "
+            "first. The path must already be free of symlinks in every "
+            "component - resolve it client-side before calling, since "
+            "the policy check deliberately looks at the raw path, not "
+            "where it resolves to, so a symlink anywhere along the way "
+            "is refused even if the real target would be allowed."
+        ),
+        risk="mutate_guest",
+        title="Mount Directory",
+        interact_ok=True,
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "drive": {
+                    "type": "string",
+                    "description": "Drive letter, e.g. 'C'.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Host directory to mount - see mount_status for allowed_bases.",
+                },
+                "readonly": {
+                    "type": "boolean",
+                    "description": "Mount read-only (default false).",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Volume label (default '<LETTER>_DRIVE').",
+                },
+            },
+            "required": ["drive", "path"],
+        },
+        handler=lambda args: _drive_mount(client, args),
+        feature=feature,
+    )
+
+    add_tool(
         name="mount_lock",
         description=(
             "Freeze the mount configuration: after this, every "
@@ -238,6 +290,17 @@ def _drive_swap(client, args):
     import mcp.types as types
     body = {"drive": args["drive"], "image": args["image"]}
     result = client.post("/api/v1/drive/swap", json=body)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _drive_mount(client, args):
+    import mcp.types as types
+    body = {"drive": args["drive"], "path": args["path"]}
+    if "readonly" in args:
+        body["readonly"] = args["readonly"]
+    if "label" in args:
+        body["label"] = args["label"]
+    result = client.post("/api/v1/drive/mount", json=body)
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 

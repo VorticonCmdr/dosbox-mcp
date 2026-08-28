@@ -76,6 +76,7 @@ def test_all_tools_registered_regardless_of_features():
     assert "mount_status" in names
     assert "mount_images" in names
     assert "drive_swap" in names
+    assert "drive_mount" in names
     assert "mount_lock" in names
     assert "batch_execute" in names
 
@@ -106,6 +107,7 @@ class TestCapabilityModes:
         assert "script_start" not in names
         assert "script_log" in names
         assert "drive_swap" not in names
+        assert "drive_mount" not in names
         assert "mount_lock" not in names
         assert "port_write" not in names
         assert "mem_allocations" in names
@@ -161,6 +163,7 @@ class TestCapabilityModes:
         assert "script_start" in names
         assert "video_capture_start" in names
         assert "drive_swap" in names
+        assert "drive_mount" in names
         assert "mount_lock" in names
         assert "mem_write" not in names
         assert "freeze_set" not in names

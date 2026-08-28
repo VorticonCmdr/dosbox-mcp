@@ -8,6 +8,7 @@ build/
 .ruff_cache/
 .sessions/
 .claude/
+.DS_Store
 # Library, not an app: consumers resolve their own versions from the
 # ranges in pyproject.toml, so this lockfile is a local dev artifact.
 uv.lock

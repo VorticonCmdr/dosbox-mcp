@@ -9,6 +9,7 @@ from dosbox_mcp.tools.media import (
     _capture_status,
     _capture_stop,
     _drive_list,
+    _drive_mount,
     _drive_swap,
     _mount_images,
     _mount_lock,
@@ -78,6 +79,39 @@ def test_drive_swap_posts_drive_and_image_as_the_json_body():
     assert client.last_path == "/api/v1/drive/swap"
     assert client.last_kwargs["json"] == {
         "drive": "A", "image": "/games/images/disk2.img"}
+
+
+def test_drive_mount_posts_drive_and_path_as_the_json_body():
+    client = _FakeClient({"status": "ok", "drive": "C"})
+
+    _drive_mount(client, {"drive": "C", "path": "/games/files"})
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/drive/mount"
+    assert client.last_kwargs["json"] == {"drive": "C", "path": "/games/files"}
+
+
+def test_drive_mount_omits_readonly_and_label_when_not_given():
+    client = _FakeClient({"status": "ok", "drive": "C"})
+
+    _drive_mount(client, {"drive": "C", "path": "/games/files"})
+
+    assert "readonly" not in client.last_kwargs["json"]
+    assert "label" not in client.last_kwargs["json"]
+
+
+def test_drive_mount_passes_readonly_and_label_when_given():
+    client = _FakeClient({"status": "ok", "drive": "C"})
+
+    _drive_mount(client, {
+        "drive": "C", "path": "/games/files",
+        "readonly": True, "label": "MYDATA",
+    })
+
+    assert client.last_kwargs["json"] == {
+        "drive": "C", "path": "/games/files",
+        "readonly": True, "label": "MYDATA",
+    }
 
 
 def test_mount_lock_posts_with_no_body():
