@@ -53,6 +53,8 @@ def test_all_tools_registered_regardless_of_features():
     assert "mouse_set_position" in names
     assert "mem_search" in names
     assert "dos_memory_map" in names
+    assert "dos_ems_status" in names
+    assert "dos_xms_status" in names
     assert "mem_alloc" in names
     assert "mem_free" in names
     assert "mem_allocations" in names

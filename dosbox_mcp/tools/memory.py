@@ -529,6 +529,50 @@ def register_search(server, client, add_tool, feature=None, annotate=None):
         feature=feature,
     )
 
+    add_tool(
+        name="dos_ems_status",
+        description=(
+            "Guest-visible EMS (expanded memory) state: whether the "
+            "driver is enabled, total/free 16KB pages, and every "
+            "currently active handle's DOS-assigned name, page count, "
+            "and current page-frame mapping (which of the handle's own "
+            "logical pages sit in which of the 4 physical page-frame "
+            "slots right now). Unused handle slots are omitted, not "
+            "listed as empty. Distinct from mem_alloc's area='UMA'/"
+            "'CONV' options and this bridge's own memory tools, which "
+            "never touch the guest's actual EMS driver - this is what "
+            "a DOS program sees when it calls INT 67h, useful for "
+            "diagnosing an installer's 'out of expanded memory' "
+            "failure or confirming a game actually grabbed the EMS it "
+            "claims to need."
+        ),
+        risk="read",
+        title="EMS Status",
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _dos_ems_status(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="dos_xms_status",
+        description=(
+            "Guest-visible XMS (extended memory) state: total/largest-"
+            "free KB, A20 line state, HMA/UMB ownership, and every "
+            "currently allocated handle's size and lock count. "
+            "Distinct from this bridge's own memory tools, which never "
+            "touch the guest's actual XMS driver - this is what a DOS "
+            "program sees when it calls INT 2Fh AH=43h, useful for "
+            "diagnosing an installer's 'out of extended memory' "
+            "failure or confirming a game actually grabbed the XMS it "
+            "claims to need."
+        ),
+        risk="read",
+        title="XMS Status",
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _dos_xms_status(client),
+        feature=feature,
+    )
+
 
 def register_snapshot(server, client, add_tool, feature=None):
     add_tool(
@@ -851,3 +895,15 @@ def _dos_memory_map(client, args, annotate=None):
         out["first_shell"] = result.get("firstShell")
 
     return [types.TextContent(type="text", text=json.dumps(out))]
+
+
+def _dos_ems_status(client):
+    import mcp.types as types
+    result = client.get("/api/v1/dos/ems")
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _dos_xms_status(client):
+    import mcp.types as types
+    result = client.get("/api/v1/dos/xms")
+    return [types.TextContent(type="text", text=json.dumps(result))]

@@ -11,7 +11,9 @@ from dosbox_mcp.client import DosboxError
 from dosbox_mcp.tools.memory import (
     MAX_LENGTH_BYTES,
     MAX_RENDERED_VIEW_BYTES,
+    _dos_ems_status,
     _dos_memory_map,
+    _dos_xms_status,
     _mem_alloc,
     _mem_allocations,
     _mem_diff,
@@ -714,3 +716,35 @@ def test_dos_memory_map_with_no_free_blocks_reports_zero_not_an_error():
     body = json.loads(result[0].text)
     assert body["free_bytes"] == 0
     assert body["largest_free_bytes"] == 0
+
+
+def test_dos_ems_status_gets_the_ems_route_and_passes_the_response_through():
+    response = {
+        "enabled": True, "totalPages": 1024, "freePages": 932,
+        "handles": [{"handle": 1, "name": "TESTPROG", "pages": 128,
+                    "pageMappings": [{"physicalPage": 0, "logicalPage": 4}]}],
+    }
+    client = _FakeClient(response)
+
+    result = _dos_ems_status(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/dos/ems"
+    assert json.loads(result[0].text) == response
+
+
+def test_dos_xms_status_gets_the_xms_route_and_passes_the_response_through():
+    response = {
+        "enabled": True, "totalKb": 65536, "largestFreeKb": 61440,
+        "a20": {"enabled": False, "timesEnabled": 12},
+        "hma": {"available": True, "dosHasControl": True, "appHasControl": False},
+        "umb": {"available": True},
+        "handles": [{"handle": 1, "sizeKb": 1024, "lockCount": 0}],
+    }
+    client = _FakeClient(response)
+
+    result = _dos_xms_status(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/dos/xms"
+    assert json.loads(result[0].text) == response
