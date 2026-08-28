@@ -27,7 +27,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from .config import Config
+from .config import Config, engine_config_dir
 
 log = logging.getLogger(__name__)
 
@@ -112,16 +112,44 @@ class InstanceManager:
             str(self._config.binary),
             # Ignore whatever primary/local config the operator's own
             # dosbox-automation setup has: a spawned instance is fully
-            # specified by the --set overrides below, never by config-dir
-            # discovery (get_or_create_config_dir() in src/misc/cross.cpp
-            # resolves differently per platform - notably on macOS it
-            # ignores XDG_CONFIG_HOME entirely - so this manager cannot
-            # rely on it to find a conf file it wrote).
+            # specified by the --set overrides below, plus whatever
+            # _write_policy_config() placed at the resolved config-dir
+            # path (get_or_create_config_dir(), src/misc/cross.cpp).
+            # These flags gate the Setup/Property system's own config
+            # bootstrap, not the mount-policy loader - WEBSERVER_Init()
+            # reads the primary config's [webserver] section for
+            # mount_allowed_bases/mount_allowed_image_roots
+            # unconditionally, regardless of --noprimaryconf.
             "--noprimaryconf",
             "--nolocalconf",
             "--set", "webserver_enabled=true",
             "--set", f"webserver_port={self._config.port}",
         ]
+
+    def _write_policy_config(self, state_dir: Path) -> None:
+        """Write a primary config the engine reads regardless of
+        --noprimaryconf/--nolocalconf: WEBSERVER_Init() unconditionally
+        calls InitPolicyConfig(get_primary_config_path())
+        (src/webserver/webserver.cpp) - a separate, bespoke parser from
+        the Setup/Property system those flags actually gate. start()
+        below points both HOME and XDG_CONFIG_HOME at state_dir, so
+        engine_config_dir(state_dir) is exactly where the engine will
+        look. Writes nothing when neither list is configured, matching
+        the engine's own out-of-the-box (deny-all) policy."""
+        lines = []
+        if self._config.mount_allowed_bases:
+            bases = ";".join(str(p) for p in self._config.mount_allowed_bases)
+            lines.append(f"mount_allowed_bases = {bases}")
+        if self._config.mount_allowed_image_roots:
+            roots = ";".join(str(p) for p in self._config.mount_allowed_image_roots)
+            lines.append(f"mount_allowed_image_roots = {roots}")
+        if not lines:
+            return
+        config_dir = engine_config_dir(state_dir)
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "dosbox-automation.conf").write_text(
+            "[webserver]\n" + "\n".join(lines) + "\n", encoding="utf-8"
+        )
 
     def start(self, deadline_seconds: float = 30.0) -> dict:
         """Spawn the configured binary and complete an authenticated
@@ -136,6 +164,14 @@ class InstanceManager:
             argv = self.build_argv()
 
             self._state_dir = Path(tempfile.mkdtemp(prefix="dosbox-mcp-"))
+            try:
+                self._write_policy_config(self._state_dir)
+            except OSError as e:
+                self._cleanup()
+                raise SpawnError(
+                    f"cannot write mount policy config for the spawned "
+                    f"instance: {e}"
+                ) from e
             token = secrets.token_hex(32)
             env = dict(os.environ)
             # HOME redirects the engine's config dir on POSIX,

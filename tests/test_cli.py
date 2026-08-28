@@ -43,6 +43,16 @@ class TestSetup:
         assert "port" in out
         assert "8386" in out
 
+    def test_no_args_prints_mount_policy(self, config_path, capsys, tmp_path):
+        games = tmp_path / "games"
+        games.mkdir()
+        config_path.write_text(f'mount_allowed_bases = ["{games}"]\n',
+                               encoding="utf-8")
+        assert cli.main(["setup"]) == 0
+        out = capsys.readouterr().out
+        assert str(games) in out
+        assert "mount_allowed_image_roots" in out
+
     def test_bad_value_fails_loudly(self, config_path, capsys):
         assert cli.main(["setup", "--port", "99999"]) == 2
         assert "range" in capsys.readouterr().err

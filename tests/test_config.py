@@ -13,6 +13,7 @@ from dosbox_mcp.config import (
     ToolProtectedKey,
     default_ghidra_map_path,
     default_token_path,
+    engine_config_dir,
     update_config_file,
     validate_base_url,
     write_config_template,
@@ -95,6 +96,26 @@ class TestDefaultTokenPath:
         assert path == tmp_path / "dosbox-automation" / "webserver" / "api_token"
 
 
+class TestEngineConfigDir:
+    """engine_config_dir(home) must match get_or_create_config_dir()
+    (src/misc/cross.cpp) for a spawned instance whose HOME and
+    XDG_CONFIG_HOME are both pointed at `home` - the isolation
+    InstanceManager.start() always applies."""
+
+    def test_macos_uses_preferences_ignoring_xdg(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        assert engine_config_dir(tmp_path) == (
+            tmp_path / "Library" / "Preferences" / "dosbox-automation"
+        )
+
+    def test_linux_or_windows_uses_home_directly(self, monkeypatch, tmp_path):
+        # Not home/.config - XDG_CONFIG_HOME is set to home itself by
+        # InstanceManager, not home/.config (that's the integration test
+        # harness's own choice, a different caller).
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert engine_config_dir(tmp_path) == tmp_path / "dosbox-automation"
+
+
 class TestDefaultGhidraMapPath:
     def test_defaults_under_the_bridges_own_config_dir(self, monkeypatch):
         monkeypatch.delenv("DOSBOX_MCP_GHIDRA_MAP", raising=False)
@@ -119,6 +140,8 @@ class TestConfigLoad:
         assert cfg.binary is None
         assert cfg.protocol is None
         assert cfg.token_file is None
+        assert cfg.mount_allowed_bases == []
+        assert cfg.mount_allowed_image_roots == []
 
     def test_toml_values_loaded(self, tmp_path, monkeypatch):
         toml = tmp_path / "config.toml"
@@ -190,6 +213,91 @@ class TestConfigLoad:
             Config.load()
 
 
+class TestMountPolicyKeys:
+    """mount_allowed_bases/mount_allowed_image_roots: written into a
+    spawned instance's own primary config by InstanceManager, so
+    validated as strictly here as the engine's own ParsePathList - see
+    _validate_path_list's docstring for why (a bad entry there is
+    silently dropped with only a log warning)."""
+
+    def test_toml_arrays_of_existing_dirs_loaded(self, tmp_path, monkeypatch):
+        games = tmp_path / "games"
+        games.mkdir()
+        images = tmp_path / "images"
+        images.mkdir()
+        toml = tmp_path / "config.toml"
+        toml.write_text(
+            f'mount_allowed_bases = ["{games}"]\n'
+            f'mount_allowed_image_roots = ["{images}"]\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        cfg = Config.load()
+        assert cfg.mount_allowed_bases == [games]
+        assert cfg.mount_allowed_image_roots == [images]
+
+    @pytest.mark.parametrize("key", ["mount_allowed_bases", "mount_allowed_image_roots"])
+    def test_relative_path_rejected(self, key, tmp_path, monkeypatch):
+        toml = tmp_path / "config.toml"
+        toml.write_text(f'{key} = ["relative/dir"]\n', encoding="utf-8")
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        with pytest.raises(ValueError, match="absolute"):
+            Config.load()
+
+    @pytest.mark.parametrize("key", ["mount_allowed_bases", "mount_allowed_image_roots"])
+    def test_nonexistent_directory_rejected(self, key, tmp_path, monkeypatch):
+        missing = tmp_path / "does-not-exist"
+        toml = tmp_path / "config.toml"
+        toml.write_text(f'{key} = ["{missing}"]\n', encoding="utf-8")
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        with pytest.raises(ValueError, match="does not exist"):
+            Config.load()
+
+    @pytest.mark.parametrize("key", ["mount_allowed_bases", "mount_allowed_image_roots"])
+    def test_file_not_a_directory_rejected(self, key, tmp_path, monkeypatch):
+        a_file = tmp_path / "not-a-dir"
+        a_file.write_text("x", encoding="utf-8")
+        toml = tmp_path / "config.toml"
+        toml.write_text(f'{key} = ["{a_file}"]\n', encoding="utf-8")
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        with pytest.raises(ValueError, match="does not exist"):
+            Config.load()
+
+    @pytest.mark.parametrize("key", ["mount_allowed_bases", "mount_allowed_image_roots"])
+    def test_more_than_five_entries_rejected(self, key, tmp_path, monkeypatch):
+        dirs = []
+        for i in range(6):
+            d = tmp_path / f"dir{i}"
+            d.mkdir()
+            dirs.append(str(d))
+        toml = tmp_path / "config.toml"
+        array = ", ".join(f'"{d}"' for d in dirs)
+        toml.write_text(f"{key} = [{array}]\n", encoding="utf-8")
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        with pytest.raises(ValueError, match="at most 5"):
+            Config.load()
+
+    @pytest.mark.parametrize("key", ["mount_allowed_bases", "mount_allowed_image_roots"])
+    def test_symlinked_path_rejected(self, key, tmp_path, monkeypatch):
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        toml = tmp_path / "config.toml"
+        toml.write_text(f'{key} = ["{link}"]\n', encoding="utf-8")
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        with pytest.raises(ValueError, match="symlink"):
+            Config.load()
+
+    @pytest.mark.parametrize("key", ["mount_allowed_bases", "mount_allowed_image_roots"])
+    def test_non_list_value_rejected(self, key, tmp_path, monkeypatch):
+        toml = tmp_path / "config.toml"
+        toml.write_text(f'{key} = "{tmp_path}"\n', encoding="utf-8")
+        monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(toml))
+        with pytest.raises(ValueError, match="list of path strings"):
+            Config.load()
+
+
 class TestUpdateConfigFile:
     def test_creates_file_with_values(self, tmp_path):
         path = tmp_path / "config.toml"
@@ -227,10 +335,15 @@ class TestUpdateConfigFile:
     @pytest.mark.parametrize("key,value", [
         ("binary", "/some/other/binary"),
         ("mode", "full"),
+        ("mount_allowed_bases", ["/some/dir"]),
+        ("mount_allowed_image_roots", ["/some/dir"]),
     ])
     def test_protected_keys_rejected_when_flagged(self, key, value, tmp_path):
-        # bridge_setup path: binary (code execution) and mode (privilege)
-        # must be rejected loudly, not written.
+        # bridge_setup path: binary (code execution), mode (privilege),
+        # and the mount whitelists (filesystem access) must be rejected
+        # loudly, not written. The protected-key check runs before
+        # per-key validation, so an unresolvable dummy value here still
+        # proves the rejection, not a validation failure.
         path = tmp_path / "config.toml"
         with pytest.raises(ToolProtectedKey, match=key):
             update_config_file(path, {key: value}, tool_facing=True)
@@ -238,12 +351,16 @@ class TestUpdateConfigFile:
 
     def test_protected_keys_allowed_for_cli(self, tmp_path):
         # The human-facing CLI may set anything.
+        allowed = tmp_path / "games"
+        allowed.mkdir()
         path = tmp_path / "config.toml"
         update_config_file(path, {"binary": "/opt/dosbox/dosbox",
-                                  "mode": "observe"})
+                                  "mode": "observe",
+                                  "mount_allowed_bases": [str(allowed)]})
         text = path.read_text(encoding="utf-8")
         assert "/opt/dosbox/dosbox" in text
         assert "observe" in text
+        assert str(allowed) in text
 
 
 class TestConfigTemplate:
@@ -253,7 +370,8 @@ class TestConfigTemplate:
         text = path.read_text(encoding="utf-8")
         assert text.count("#") >= 6
         for key in ("binary", "port", "headless", "protocol", "mode",
-                    "token_file"):
+                    "token_file", "mount_allowed_bases",
+                    "mount_allowed_image_roots"):
             assert key in text
         monkeypatch.setenv("DOSBOX_MCP_CONFIG", str(path))
         monkeypatch.delenv("DOSBOX_TOKEN_FILE", raising=False)

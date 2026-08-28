@@ -7,10 +7,12 @@ import os
 import stat
 import textwrap
 import time
+from pathlib import Path
 
 import pytest
 
-from dosbox_mcp.config import Config
+from dosbox_mcp import lifecycle as lifecycle_module
+from dosbox_mcp.config import Config, engine_config_dir
 from dosbox_mcp.lifecycle import InstanceManager, LifecycleError, RingLog, SpawnError
 
 
@@ -47,9 +49,12 @@ def fake_engine(tmp_path):
     """)
 
 
-def _config(binary=None, port=8386, headless=False):
+def _config(binary=None, port=8386, headless=False, mount_allowed_bases=None,
+           mount_allowed_image_roots=None):
     return Config(base_url=f"http://127.0.0.1:{port}", binary=binary, port=port,
-                 headless=headless)
+                 headless=headless,
+                 mount_allowed_bases=mount_allowed_bases or [],
+                 mount_allowed_image_roots=mount_allowed_image_roots or [])
 
 
 def _ok_attach(calls):
@@ -203,6 +208,109 @@ class TestSpawn:
         with pytest.raises(SpawnError, match="cannot bind port"):
             manager.start(deadline_seconds=5.0)
         assert not manager.running
+
+
+class TestPolicyConfig:
+    """mount_allowed_bases/mount_allowed_image_roots must reach the
+    spawned engine despite --noprimaryconf: WEBSERVER_Init() reads the
+    primary config's [webserver] section unconditionally
+    (src/webserver/webserver.cpp), so writing one at the path HOME/
+    XDG_CONFIG_HOME resolve to is enough - no flag change needed."""
+
+    def _written_primary_conf(self, tmp_path) -> str:
+        dump_path = tmp_path / "env_dump.json"
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not dump_path.exists():
+            time.sleep(0.05)
+        dump = json.loads(dump_path.read_text())
+        home = Path(dump["HOME"])
+        conf_path = engine_config_dir(home) / "dosbox-automation.conf"
+        return conf_path.read_text(encoding="utf-8")
+
+    def test_mount_allowed_bases_written_before_spawn(self, fake_engine, tmp_path):
+        games = tmp_path / "games"
+        games.mkdir()
+        manager = InstanceManager(
+            _config(binary=fake_engine, mount_allowed_bases=[games]),
+            attach=_ok_attach([]),
+        )
+        try:
+            manager.start(deadline_seconds=5.0)
+            text = self._written_primary_conf(tmp_path)
+            assert "[webserver]" in text
+            assert f"mount_allowed_bases = {games}" in text
+            assert "mount_allowed_image_roots" not in text
+        finally:
+            if manager.running:
+                manager.stop()
+
+    def test_mount_allowed_image_roots_written_before_spawn(self, fake_engine, tmp_path):
+        images = tmp_path / "images"
+        images.mkdir()
+        manager = InstanceManager(
+            _config(binary=fake_engine, mount_allowed_image_roots=[images]),
+            attach=_ok_attach([]),
+        )
+        try:
+            manager.start(deadline_seconds=5.0)
+            text = self._written_primary_conf(tmp_path)
+            assert f"mount_allowed_image_roots = {images}" in text
+            assert "mount_allowed_bases" not in text
+        finally:
+            if manager.running:
+                manager.stop()
+
+    def test_both_lists_written_semicolon_joined(self, fake_engine, tmp_path):
+        a = tmp_path / "a"
+        a.mkdir()
+        b = tmp_path / "b"
+        b.mkdir()
+        manager = InstanceManager(
+            _config(binary=fake_engine, mount_allowed_bases=[a, b]),
+            attach=_ok_attach([]),
+        )
+        try:
+            manager.start(deadline_seconds=5.0)
+            text = self._written_primary_conf(tmp_path)
+            assert f"mount_allowed_bases = {a};{b}" in text
+        finally:
+            if manager.running:
+                manager.stop()
+
+    def test_config_dir_write_failure_wrapped_and_state_dir_cleaned_up(
+            self, fake_engine, tmp_path, monkeypatch):
+        games = tmp_path / "games"
+        games.mkdir()
+        # A file where the resolved config dir's parent needs to be a
+        # directory makes mkdir(parents=True) genuinely fail with an
+        # OSError - the real failure mode this wraps, not a mock.
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr(lifecycle_module, "engine_config_dir",
+                            lambda home: blocked / "dosbox-automation")
+        manager = InstanceManager(
+            _config(binary=fake_engine, mount_allowed_bases=[games]),
+            attach=_ok_attach([]),
+        )
+        with pytest.raises(SpawnError, match="mount policy config"):
+            manager.start(deadline_seconds=5.0)
+        assert not manager.running
+
+    def test_no_primary_conf_written_when_policy_unset(self, fake_engine, tmp_path):
+        manager = InstanceManager(_config(binary=fake_engine), attach=_ok_attach([]))
+        try:
+            manager.start(deadline_seconds=5.0)
+            dump_path = tmp_path / "env_dump.json"
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not dump_path.exists():
+                time.sleep(0.05)
+            dump = json.loads(dump_path.read_text())
+            conf_path = (engine_config_dir(Path(dump["HOME"])) /
+                        "dosbox-automation.conf")
+            assert not conf_path.exists()
+        finally:
+            if manager.running:
+                manager.stop()
 
 
 class TestStop:

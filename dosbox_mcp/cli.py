@@ -68,6 +68,9 @@ def _cmd_setup(args) -> int:
             "protocol": config.protocol,
             "mode": config.mode,
             "token_file": str(config.token_file) if config.token_file else None,
+            "mount_allowed_bases": [str(p) for p in config.mount_allowed_bases],
+            "mount_allowed_image_roots":
+                [str(p) for p in config.mount_allowed_image_roots],
         }
         print(json.dumps(current, indent=2))
         return 0

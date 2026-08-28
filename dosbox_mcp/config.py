@@ -8,7 +8,7 @@ import re
 import sys
 import tempfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -88,6 +88,26 @@ def default_token_path() -> Path:
     return base / "webserver" / "api_token"
 
 
+def engine_config_dir(home: Path) -> Path:
+    """Where the engine resolves its primary config directory
+    (get_or_create_config_dir(), src/misc/cross.cpp) when both HOME and
+    XDG_CONFIG_HOME are set to `home` - the isolation InstanceManager
+    always applies to a spawned instance so it never touches the
+    operator's real home directory.
+
+    macOS ignores XDG_CONFIG_HOME entirely and resolves through HOME.
+    Windows and Linux/BSD both honor an explicit XDG_CONFIG_HOME, which
+    here is `home` itself (not home/.config - that's a choice specific
+    to dosbox-automation's own integration test harness, which points
+    XDG_CONFIG_HOME at work_dir/.config instead), so both collapse to
+    the same home/dosbox-automation.
+    """
+    name = "dosbox-automation"
+    if sys.platform == "darwin":
+        return home / "Library" / "Preferences" / name
+    return home / name
+
+
 def resolved_token_path(token_file: Path | None = None) -> Path:
     """Where read_token() will actually look: the given path, else
     DOSBOX_TOKEN_FILE, else the engine's default location. Exposed so
@@ -152,6 +172,53 @@ def _validate_path(key: str):
     return check
 
 
+# Mirrors max_entries in ParsePolicyConfig (src/dos/programs/mount_policy.cpp):
+# the engine silently drops entries past this cap with only a log warning,
+# so rejecting here at config-load time gives a loud error instead.
+_MAX_POLICY_ENTRIES = 5
+
+
+def _validate_path_list(key: str):
+    def check(value: object) -> list[Path]:
+        _require(isinstance(value, list),
+                 f"{key} must be a list of path strings, got {value!r}")
+        _require(len(value) <= _MAX_POLICY_ENTRIES,
+                 f"{key} accepts at most {_MAX_POLICY_ENTRIES} entries "
+                 f"(the engine's own per-key cap), got {len(value)}")
+        paths = []
+        for item in value:
+            _require(isinstance(item, str) and item != "",
+                     f"{key} entries must be non-empty strings, got {item!r}")
+            path = Path(item)
+            # Absolute and an existing directory: the engine's own
+            # ParsePathList canonicalizes each entry and silently drops
+            # (log warning only) anything that doesn't resolve - an
+            # operator typo would otherwise surface only as
+            # drive_mount/drive_swap failing with outside_whitelist,
+            # with no clearer signal than a line buried in bridge_logs.
+            _require(path.is_absolute(),
+                     f"{key} entry {item!r} must be an absolute path")
+            _require(path.is_dir(),
+                     f"{key} entry {item!r} does not exist or is not a directory")
+            # The engine's own drive_mount/drive_swap check
+            # (HasSymlinkComponent) inspects the raw path a caller
+            # supplies, not where it resolves to - a symlinked spelling
+            # here would canonicalize fine into the primary config but
+            # then never actually be usable, since a caller would have
+            # to pass the resolved form anyway to get past that check.
+            resolved = path.resolve()
+            _require(resolved == path,
+                     f"{key} entry {item!r} contains a symlink component - "
+                     f"a drive_mount/drive_swap call must supply the "
+                     f"already-resolved path to get past the engine's own "
+                     f"symlink check, so this entry would never match a "
+                     f"caller's request; use the resolved path instead: "
+                     f"{resolved}")
+            paths.append(path)
+        return paths
+    return check
+
+
 _TOML_KEYS = {
     "binary": _validate_path("binary"),
     "port": _validate_port,
@@ -159,6 +226,8 @@ _TOML_KEYS = {
     "protocol": _validate_protocol,
     "mode": _validate_mode,
     "token_file": _validate_path("token_file"),
+    "mount_allowed_bases": _validate_path_list("mount_allowed_bases"),
+    "mount_allowed_image_roots": _validate_path_list("mount_allowed_image_roots"),
 }
 
 
@@ -188,6 +257,8 @@ class Config:
     protocol: str | None = None
     mode: str = "full"
     token_file: Path | None = None
+    mount_allowed_bases: list[Path] = field(default_factory=list)
+    mount_allowed_image_roots: list[Path] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
@@ -208,6 +279,8 @@ class Config:
             protocol=data.get("protocol"),
             mode=data.get("mode", "full"),
             token_file=token_file,
+            mount_allowed_bases=data.get("mount_allowed_bases", []),
+            mount_allowed_image_roots=data.get("mount_allowed_image_roots", []),
         )
         cfg.token = read_token(cfg.token_file)
         return cfg
@@ -222,7 +295,15 @@ class ToolProtectedKey(ValueError):
 # mode: the operator's constraint on the agent - an agent that can raise
 # it escalates its own privileges. Both are human-only (self-audit
 # 2026-07-17).
-_TOOL_PROTECTED_KEYS = frozenset({"binary", "mode"})
+# mount_allowed_bases/mount_allowed_image_roots: the filesystem
+# whitelist drive_mount/drive_swap enforce - an agent that could widen
+# it would be granting itself access, defeating the whitelist entirely.
+# bridge_setup's tool schema already excludes all four keys
+# (additionalProperties: False, only port/headless/protocol listed);
+# this set is the second gate, exercised if that schema is ever loosened.
+_TOOL_PROTECTED_KEYS = frozenset({
+    "binary", "mode", "mount_allowed_bases", "mount_allowed_image_roots",
+})
 
 _CONFIG_TEMPLATE = """\
 # dosbox-mcp configuration
@@ -253,6 +334,18 @@ _CONFIG_TEMPLATE = """\
 # Token file of an already-running instance to attach to. Leave unset
 # to use the engine's default location.
 #token_file = "~/.config/dosbox-automation/webserver/api_token"
+
+# Directories a bridge_start-spawned instance allows drive_mount to
+# mount, and image roots it allows drive_swap to pull disk images from
+# - written into the spawned instance's own primary config, since the
+# engine reads its mount policy from there regardless of
+# --noprimaryconf. TOML arrays of absolute paths, max 5 entries each
+# (the engine's own per-key cap). Unset means every drive_mount/
+# drive_swap call against a spawned instance is refused by policy
+# regardless of path - the out-of-the-box state. Human-edited only: no
+# tool can change this, the same reasoning as binary and mode.
+#mount_allowed_bases = ["/home/user/games"]
+#mount_allowed_image_roots = ["/home/user/images"]
 """
 
 
