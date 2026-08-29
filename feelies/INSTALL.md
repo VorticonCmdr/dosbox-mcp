@@ -6,21 +6,28 @@ short, because installation is short.
 ## Requirements
 
 - Python 3.11 or newer.
-- A dosbox build that speaks the automation API. The reference is
-  dosbox-automation, downloads at https://dosbox-automation.org.
+- A dosbox build that speaks the full automation API this bridge uses
+  (debugger, batch, wait_for included): [VorticonCmdr's
+  dosbox-automation fork](https://github.com/VorticonCmdr/dosbox-automation),
+  built from source. Upstream dosbox-automation
+  (https://dosbox-automation.org) doesn't implement those additions.
 - An MCP client (Claude Code, Claude Desktop, or anything else that
   speaks the Model Context Protocol over stdio).
 
 ## Install
 
+This fork is published to PyPI as `vorticoncmdr-dosbox-mcp` (a
+different name from upstream's own `dosbox-mcp` package, to avoid a
+naming collision); the installed command is still `dosbox-mcp`.
+
 ```
-pip install dosbox-mcp
+pip install vorticoncmdr-dosbox-mcp
 ```
 
 or, without installing anything permanently:
 
 ```
-uvx dosbox-mcp
+uvx --from vorticoncmdr-dosbox-mcp dosbox-mcp
 ```
 
 ## Register with your MCP client

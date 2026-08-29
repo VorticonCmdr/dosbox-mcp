@@ -23,7 +23,7 @@ from ..protocol import BRIDGE_PROTOCOL, known_route_prefixes, parse_version
 
 def _bridge_version() -> str:
     try:
-        return metadata.version("dosbox-mcp")
+        return metadata.version("vorticoncmdr-dosbox-mcp")
     except metadata.PackageNotFoundError:
         return "unknown"
 

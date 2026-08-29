@@ -1,7 +1,18 @@
 # dosbox-mcp
 
+This is [VorticonCmdr](https://github.com/VorticonCmdr)'s fork of upstream
+[dosbox-automation/dosbox-mcp](https://github.com/dosbox-automation/dosbox-mcp),
+extended with the debugger, Ghidra address-mapping, symbols, batch, and
+wait_for tool groups; it drops upstream's mixer tools. It's published
+to PyPI under a different name (`vorticoncmdr-dosbox-mcp`) so it can't
+collide with upstream's own published `dosbox-mcp` package.
+
 MCP server for [dosbox-automation](https://dosbox-automation.org):
-drive a DOS machine from an AI agent.
+drive a DOS machine from an AI agent. This particular bridge is built
+against [VorticonCmdr's dosbox-automation fork](https://github.com/VorticonCmdr/dosbox-automation) —
+most of what's below (the debugger, batch, wait_for, and Ghidra tools)
+needs that fork's expanded REST API and isn't present on upstream's own
+dosbox-automation builds.
 
 dosbox-automation is a DOSBox fork with a built-in automation API.
 This bridge connects any MCP-capable agent runtime (Claude Code and
@@ -12,15 +23,17 @@ automation API offers, as MCP tools.
 
 ## Quick start
 
-1. Install dosbox-automation and start it with the API enabled. The
-   [manual](https://dosbox-automation.org) covers setup for all
-   platforms; the short version is `webserver_enabled = true` in its
-   config, or `--set webserver_enabled=true` on the command line.
+1. Build [VorticonCmdr's dosbox-automation
+   fork](https://github.com/VorticonCmdr/dosbox-automation) and start
+   it with the API enabled: `webserver_enabled = true` in its config,
+   or `--set webserver_enabled=true` on the command line. (Upstream's
+   own dosbox-automation builds don't expose the debugger/batch/wait_for
+   routes most of this bridge's tools rely on.)
 
 2. Add the bridge to your MCP client. For Claude Code:
 
    ```
-   claude mcp add dosbox -- uvx dosbox-mcp
+   claude mcp add dosbox -- uvx --from vorticoncmdr-dosbox-mcp dosbox-mcp
    ```
 
    Or in a JSON MCP configuration:
@@ -28,13 +41,14 @@ automation API offers, as MCP tools.
    ```json
    {
      "mcpServers": {
-       "dosbox": { "command": "uvx", "args": ["dosbox-mcp"] }
+       "dosbox": { "command": "uvx", "args": ["--from", "vorticoncmdr-dosbox-mcp", "dosbox-mcp"] }
      }
    }
    ```
 
-   `pipx install dosbox-mcp` or `pip install dosbox-mcp` work just as
-   well; the command is `dosbox-mcp` either way.
+   `pipx install vorticoncmdr-dosbox-mcp` or `pip install
+   vorticoncmdr-dosbox-mcp` work just as well; the installed command is
+   still `dosbox-mcp` either way.
 
 That's it. The bridge finds the running emulator, checks what it can
 do, and registers the matching tools. Ask your agent for `bridge_status`
@@ -142,9 +156,12 @@ of `feelies/REFCARD.md` for the tool list.
 ## An open protocol
 
 The contract between this bridge and the emulator is written down in
-[PROTOCOL.md](PROTOCOL.md) and versioned independently. dosbox-automation
-is the reference implementation; any DOSBox variant that speaks the
-protocol works with this bridge.
+[PROTOCOL.md](PROTOCOL.md) and versioned independently. Everything
+through protocol 1.0.0 traces back to upstream dosbox-automation; every
+version past that was added for this bridge, and its reference engine
+is [VorticonCmdr's dosbox-automation fork](https://github.com/VorticonCmdr/dosbox-automation).
+Any DOSBox variant that implements a given protocol version is a valid
+peer at that version.
 
 ## In the box
 
@@ -155,7 +172,10 @@ sheet, and a tech-support page.
 ## Requirements
 
 - Python 3.11 or newer
-- A running dosbox-automation (0.84-da2 or newer) on the same machine
+- A running [VorticonCmdr's dosbox-automation
+  fork](https://github.com/VorticonCmdr/dosbox-automation) (0.84-vc1 or
+  newer) on the same machine — upstream dosbox-automation builds don't
+  implement this bridge's debugger/batch/wait_for protocol additions
 
 ## License
 

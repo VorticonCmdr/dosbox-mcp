@@ -4,10 +4,15 @@ Version 1.0.0 (2026-07-17)
 
 This document specifies the contract between an MCP bridge and a
 DOSBox-family emulator that exposes the automation REST API. The bridge
-declares what the protocol can do; the engine delivers it. The reference
-implementation of the engine side is dosbox-automation
-(https://dosbox-automation.org); any other DOSBox variant that
-implements this contract is a valid peer.
+declares what the protocol can do; the engine delivers it. Everything
+through version 1.0.0 traces back to upstream dosbox-automation
+(https://dosbox-automation.org); every version past that was added for
+this bridge (VorticonCmdr's fork of dosbox-mcp), and its reference
+engine is [VorticonCmdr's dosbox-automation
+fork](https://github.com/VorticonCmdr/dosbox-automation) - upstream
+dosbox-automation does not implement the debugger, batch, wait, or
+scoping additions described below. Any DOSBox variant that implements
+a given protocol version is a valid peer at that version.
 
 License: this specification is licensed under Creative Commons
 Attribution-ShareAlike 4.0 International (CC-BY-SA-4.0). You may

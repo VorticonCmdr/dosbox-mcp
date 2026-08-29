@@ -14,9 +14,12 @@ operated by something that reads instructions.
 
 Three parties are involved:
 
-- the **engine**: a dosbox build with the automation webserver, for
-  example dosbox-automation (https://dosbox-automation.org). It owns
-  all validation and all safety limits.
+- the **engine**: a dosbox build with the automation webserver. This
+  bridge's debugger/batch/wait_for tools need VorticonCmdr's
+  dosbox-automation fork (https://github.com/VorticonCmdr/dosbox-automation);
+  upstream dosbox-automation (https://dosbox-automation.org) doesn't
+  implement those routes. The engine owns all validation and all
+  safety limits.
 - the **bridge** (this package): a translator between MCP tool calls
   and the engine's REST routes. It runs as a subprocess of your MCP
   client and talks to the engine on 127.0.0.1 only.
