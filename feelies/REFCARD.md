@@ -78,12 +78,40 @@ These work whether or not an engine is connected.
 
 - **mem_read** (read-only) - read guest physical memory; returns base64
   plus register state. `{"offset": 4660, "length": 64}`
-- **mem_write** - write bytes to guest memory.
-  `{"offset": 4660, "data": "AAECAw=="}`
+- **mem_write** - write bytes to guest memory. Optional `expected`
+  performs a compare-and-swap, refusing the write if the current bytes
+  don't match. `{"offset": 4660, "data": "AAECAw=="}`
 - **mem_search** (read-only) - scan a range for a value (width 1/2/4).
   `{"start": 0, "end": 655360, "value": 100, "width": 2}`
+- **mem_scan** (read-only) - scan a range for a masked byte signature,
+  Ghidra's copyable-byte-string format: space-separated hex-pair bytes
+  and `??` wildcards, 1-256 tokens, at least one fixed byte.
+  `{"pattern": "8B 46 ?? 50 E8", "start": 0, "end": 1048576}`
 - **dos_memory_map** (read-only) - walk the DOS MCB chain: which PSP
-  owns which block. `{}`
+  owns which block; free/largest-free byte summary. `detail:true` for
+  raw internals. `{}`
+- **dos_ems_status** (read-only) - guest-visible EMS state: driver
+  enabled, total/free 16KB pages, and every active handle's name, page
+  count, and current page-frame mapping. `{}`
+- **dos_xms_status** (read-only) - guest-visible XMS state:
+  total/largest-free KB, A20 line state, HMA/UMB ownership, and every
+  allocated handle's size and lock count. `{}`
+- **mem_snapshot** - capture a memory range (up to 16 MB) for later
+  comparison; returns a `handle` to pass to mem_diff.
+  `{"start": 0, "end": 65536}`
+- **mem_diff** - compare current memory against a snapshot handle,
+  narrowing surviving candidates on each call - the classic "find the
+  address of my HP counter" workflow. `op` is `changed`, `unchanged`
+  (or `equals`), `increased`, or `decreased`, each re-baselined against
+  the *previous* mem_diff call, not the original snapshot.
+  `{"handle": "snap-1", "op": "decreased", "width": 2}`
+- **mem_alloc** - allocate guest memory through the DOS/XMS allocator.
+  `area` is `CONV` (default), `UMA`, or `XMS` (best-fit only).
+  `{"size": 1024, "area": "CONV"}`
+- **mem_free** - free a block previously returned by mem_alloc. Refuses
+  (409) if the block's owner has since changed. `{"addr": 4660}`
+- **mem_allocations** (read-only) - this API's own live allocations,
+  plus free-memory totals per area. `{}`
 
 ## Freeze (feature: freeze)
 
@@ -106,20 +134,57 @@ These work whether or not an engine is connected.
 
 ## Debugger (feature: debugger)
 
-Execution control. Breakpoints only fire with an interpreted CPU core
-(`core = normal` or `full`); see PROTOCOL.md.
+Execution control. Breakpoints and stepping only fire with an
+interpreted CPU core (`core = normal` or `full`); disassembly and
+backtrace work on any build regardless of the debugger capability. See
+PROTOCOL.md.
 
 - **debug_status** (read-only) - whether execution is paused. `{}`
 - **debug_pause** - pause at the current instruction. `{}`
 - **debug_continue** - resume; arms any breakpoints added while paused.
   Returns immediately, does not wait for a breakpoint. `{}`
-- **debug_step** - execute one instruction, pause again. `{}`
-- **debug_breakpoint_add** - add an execute/interrupt/memory breakpoint.
-  `{"type": "interrupt", "int": 33, "ah": 61}`
-- **debug_breakpoint_list** (read-only) - list breakpoints; `index` is
-  positional, not stable. `{}`
-- **debug_breakpoint_delete** - remove one by index, or all if omitted.
-  `{"index": 0}`
+- **debug_step** - execute 1-64 instructions, pause again.
+  `{"count": 1}`
+- **debug_step_over** - step over the current instruction if it's a
+  call/int/loop/rep (plants a one-shot breakpoint past it and resumes);
+  falls back to a plain step otherwise. The actual stop happens later -
+  poll debug_wait with the returned `resumed_from_stop_id`. `{}`
+- **debug_run_to** - run until execution reaches segment:offset (a
+  one-shot breakpoint). Same "stop happens later" shape as step_over.
+  `{"segment": 4660, "offset": 256}`
+- **debug_step_out** - run until the current frame returns, via a
+  backtrace-derived return address. `no_confident_caller_frame` (not an
+  error) if the backtrace can't resolve the caller with high
+  confidence. `{}`
+- **debug_wait** - block until the debugger stops again (breakpoint,
+  pause, or step), or timeout_ms elapses - one call instead of polling
+  debug_status. Pass `since_stop_id` from a prior stop so one that
+  already happened isn't missed.
+  `{"since_stop_id": 3, "timeout_ms": 5000}`
+- **debug_breakpoint_add** - add an execute/interrupt/memory
+  breakpoint. Optional `once`, `ignore_count`, register/memory
+  `condition`; memory breakpoints take `trigger: "write"` (default) or
+  `"read"`. `{"type": "interrupt", "int": 33, "ah": 61}`
+- **debug_breakpoint_list** (read-only) - list breakpoints; `id` is
+  stable, `index` is positional and shifts as breakpoints are added or
+  removed. `{}`
+- **debug_breakpoint_delete** - remove one by id or index, or all if
+  both are omitted. `{"id": 1}`
+- **debug_watch_add** - add a named 16-bit watched variable at
+  segment:offset - the IV/watch-panel concept, exposed for automation.
+  `{"name": "hp", "segment": 4660, "offset": 256}`
+- **debug_watch_list** (read-only) - list watches, each with a live
+  value read fresh from guest memory (not cached) at call time. `{}`
+- **debug_watch_delete** - remove a watch by its resolved flat
+  `address` (see debug_watch_list), or all if omitted.
+  `{"address": 987654}`
+- **debug_disassemble** (read-only) - decode x86 instructions to
+  assembly text from segment:offset. Doesn't need the debugger
+  capability - works on any build, paused or running.
+  `{"segment": 4660, "offset": 256, "count": 10}`
+- **debug_backtrace** (read-only) - best-effort SS:BP call-stack walk
+  from the current CS:EIP, with per-frame confidence. Also works on any
+  build. `{"max_frames": 8}`
 
 ## Ghidra address mapping (feature: debugger)
 
@@ -141,7 +206,26 @@ address - anchoring absorbs that automatically.
 - **debug_map_to_ghidra** (read-only) - segment:offset -> Ghidra
   address; refuses rather than guessing if the segment doesn't match
   the anchor. `{"live_segment": 4660, "live_offset": 336}`
-- **debug_map_status** (read-only) - the current mapping, if any. `{}`
+- **debug_map_status** (read-only) - the current mapping, if any; flags
+  a stale (unanchored) range reloaded from disk. `{}`
+- **debug_map_auto** - anchor automatically: give the same Ghidra-style
+  byte pattern mem_scan takes plus the Ghidra address it corresponds
+  to, and this locates it live (optionally narrowing the scan range)
+  and derives the anchor from the DOS MCB chain. Only correct for
+  `.COM`-style single-segment programs; needs full capability mode
+  since it reads live engine memory.
+  `{"pattern": "8B 46 ?? 50 E8", "ghidra_address": 4211, "ghidra_start": 256, "ghidra_end": 8192, "label": "main"}`
+
+## Symbols (feature: debugger)
+
+- **debug_symbols_load** - load function/global names by pasting raw
+  output from a Ghidra MCP server's `list_functions`/`list_globals`/
+  `list_functions_enhanced`. Adds a `symbol` field to disassembly,
+  debugger stop records, backtrace frames, and the DOS memory map.
+  Requires an anchored mapping range first (see debug_map_set_base).
+  `{"text": "<pasted Ghidra tool output>"}`
+- **debug_symbols_status** (read-only) - how many symbols are
+  currently loaded. `{}`
 
 ## Scripts (the escape hatch)
 
@@ -163,7 +247,7 @@ For watching a memory address frame-by-frame and logging every change
 via `dosbox.mem_read_byte`/`dosbox.wait_frames`/`dosbox.output`, see
 "Logging a memory-triggered event, with a screenshot" in MANUAL.md.
 
-## Media and recording
+## Media and drives
 
 - **video_capture_start** - start recording. `{mode?: raw|rendered,
   compression?: 0-9}` - both optional; compression is set for `mode`
@@ -181,5 +265,28 @@ via `dosbox.mem_read_byte`/`dosbox.wait_frames`/`dosbox.output`, see
   image roots, grouped by root. `{}`
 - **drive_swap** - mount or swap a disk image onto a drive letter, for
   multi-disk installs. `{"drive": "A", "image": "/path/to/disk2.img"}`
+- **drive_mount** - mount a host directory as a drive letter (the
+  directory-mount form of guest `MOUNT`). The path must resolve under
+  a base directory the operator whitelisted (`mount_allowed_bases` in
+  the bridge config) and be free of symlink components.
+  `{"drive": "D", "path": "/home/user/dosgames/doom", "readonly": false}`
 - **mount_lock** - freeze the mount configuration; one-way for the
   life of the process. `{}`
+
+## Batch and wait (cross-cutting)
+
+- **batch_execute** - apply 1-64 memory/register/port/freeze operations
+  atomically in one emulation-thread pass (no interleaving with other
+  requests). Ops: `mem_read`, `mem_write`, `mem_cas`, `cpu_read`,
+  `cpu_write`, `port_read`, `port_write`, `freeze_set`, `freeze_clear`.
+  Not transactional - there's no rollback; `on_error` (`abort` or
+  `continue`) controls whether a failing op stops the rest.
+  `{"ops": [{"op": "mem_read", "offset": 4660, "len": 2}, {"op": "cpu_read"}]}`
+- **wait_for** (read-only) - block until a condition is true or
+  timeout_ms elapses - one call instead of a poll loop. Conditions:
+  `text` (screen substring match), `screen_change` (hash differs from
+  a prior screen_text/screen_info/screen_capture hash), `frames`
+  (count from now), `replay_done`, `memory` (addr/width/value/op),
+  `stopped` (debugger builds only), `script_done`, `program` (name
+  match, or waits for it to change if pattern is omitted).
+  `{"for": "text", "pattern": "Installation complete", "timeout_ms": 10000}`
