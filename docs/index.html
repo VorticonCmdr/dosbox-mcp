@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dosbox-mcp developer reference</title>
+<style>
+    :root {
+        --bg: #1e1e1e;
+        --panel: #252526;
+        --panel-alt: #2d2d30;
+        --border: #3c3c3c;
+        --fg: #d4d4d4;
+        --fg-dim: #8a8a8a;
+        --accent: #4ec9b0;
+        --accent-dim: #2f7a6c;
+        --warn: #d19a66;
+        --bad: #e06c75;
+        --good: #98c379;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --sans: "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.55;
+    }
+    a { color: var(--accent); }
+    code {
+        font-family: var(--mono);
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 0.1em 0.4em;
+        font-size: 0.9em;
+    }
+    pre {
+        font-family: var(--mono);
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.8em 1em;
+        overflow-x: auto;
+        font-size: 0.85em;
+        line-height: 1.5;
+    }
+    pre code { background: none; border: none; padding: 0; }
+
+    header {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        background: var(--panel-alt);
+        border-bottom: 1px solid var(--border);
+    }
+    .header-inner {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0.8em 1.5em;
+        display: flex;
+        align-items: baseline;
+        gap: 1em;
+        flex-wrap: wrap;
+    }
+    header h1 {
+        font-size: 1.05em;
+        margin: 0;
+        color: var(--accent);
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+    }
+    nav { display: flex; gap: 1.1em; flex-wrap: wrap; font-size: 0.9em; }
+    nav a { color: var(--fg-dim); text-decoration: none; }
+    nav a:hover { color: var(--accent); }
+
+    main { max-width: 1100px; margin: 0 auto; padding: 0 1.5em 4em; }
+    .lede { padding: 2em 0 1em; max-width: 46em; color: var(--fg-dim); }
+    .lede strong { color: var(--fg); }
+
+    section { padding-top: 2.2em; }
+    section > h2 {
+        font-size: 1.3em;
+        margin: 0 0 0.2em;
+        color: var(--fg);
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 0.4em;
+    }
+    section > p.section-intro { color: var(--fg-dim); max-width: 42em; margin-top: 0.6em; }
+
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; margin-top: 1em; }
+    .panel-body { padding: 1em 1.2em; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.92em; }
+    th, td { text-align: left; padding: 0.5em 0.7em; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--fg-dim); font-weight: 600; text-transform: uppercase; font-size: 0.75em; letter-spacing: 0.06em; }
+    tr:last-child td { border-bottom: none; }
+    td.mono, th.mono { font-family: var(--mono); }
+    .table-scroll { overflow-x: auto; }
+
+    .badge {
+        display: inline-block;
+        padding: 0.1em 0.55em;
+        border-radius: 1em;
+        font-size: 0.78em;
+        font-weight: 600;
+        white-space: nowrap;
+        font-family: var(--mono);
+    }
+    .badge-ro { background: var(--accent-dim); color: #dffaf3; }
+    .badge-mut { background: var(--warn); color: #201a0e; }
+    .tag-chip {
+        font-size: 0.78em;
+        color: var(--fg-dim);
+        background: var(--panel-alt);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 0.1em 0.5em;
+        white-space: nowrap;
+    }
+    .example { font-family: var(--mono); font-size: 0.82em; color: var(--fg-dim); white-space: pre-wrap; word-break: break-word; }
+
+    .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(15em, 1fr));
+        gap: 0.9em;
+        margin-top: 1em;
+    }
+    .feature-card { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 0.9em 1em; }
+    .feature-card h3 { margin: 0 0 0.35em; font-size: 0.95em; color: var(--accent); }
+    .feature-card p { margin: 0; color: var(--fg-dim); font-size: 0.88em; }
+
+    #tool-filter {
+        width: 100%;
+        max-width: 24em;
+        font-family: var(--mono);
+        font-size: 0.9em;
+        background: var(--panel-alt);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 3px;
+        padding: 0.5em 0.7em;
+        margin: 1em 0 0.6em;
+    }
+    #tool-count { color: var(--fg-dim); font-size: 0.85em; margin-left: 0.8em; }
+    .filter-row { display: flex; align-items: center; flex-wrap: wrap; }
+
+    footer {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 2em 1.5em 3em;
+        color: var(--fg-dim);
+        font-size: 0.85em;
+        border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--fg-dim); }
+    footer a:hover { color: var(--accent); }
+
+    ::selection { background: var(--accent-dim); color: #eafff9; }
+</style>
+</head>
+<body>
+
+<header>
+    <div class="header-inner">
+        <h1>dosbox-mcp</h1>
+        <nav>
+            <a href="#quick-start">Quick start</a>
+            <a href="#configuration">Configuration</a>
+            <a href="#tools">Tools</a>
+            <a href="#ghidra">Ghidra pairing</a>
+            <a href="https://github.com/VorticonCmdr/dosbox-mcp">GitHub &#8599;</a>
+        </nav>
+    </div>
+</header>
+
+<main>
+    <div class="lede">
+        <p>
+            <strong>dosbox-mcp</strong> is an MCP server that connects any MCP-capable agent
+            runtime to a running dosbox-automation instance &mdash; typing into DOS programs,
+            reading the screen, capturing frames and video, running sandboxed Lua, inspecting
+            memory, driving a full headless debugger. This page is a developer-facing map of
+            every tool this bridge actually registers right now, generated straight from the
+            tool definitions in <code>dosbox_mcp/tools/*.py</code> &mdash; not a pitch.
+        </p>
+        <p>
+            This repo is <a href="https://github.com/VorticonCmdr">VorticonCmdr</a>'s fork of
+            upstream <a href="https://github.com/dosbox-automation/dosbox-mcp">dosbox-automation/dosbox-mcp</a>,
+            adding the debugger, Ghidra address-mapping, symbols, batch, and wait_for tool
+            groups documented below; it drops upstream's mixer tools. It's built against
+            <a href="https://github.com/VorticonCmdr/dosbox-automation">VorticonCmdr's
+            dosbox-automation fork</a>, not upstream's
+            <a href="https://dosbox-automation.org">dosbox-automation</a> &mdash; most of the
+            tools here need REST routes upstream doesn't have. For this fork's code,
+            <a href="https://github.com/VorticonCmdr/dosbox-mcp">the repo</a>; for the wire
+            contract, <a href="https://github.com/VorticonCmdr/dosbox-mcp/blob/main/PROTOCOL.md">PROTOCOL.md</a>.
+        </p>
+    </div>
+
+    <section id="quick-start">
+        <h2>Quick start</h2>
+        <p class="section-intro">Point an MCP client at a running (or spawnable) emulator.</p>
+        <div class="panel"><div class="panel-body">
+<pre><code># 1. enable the API on a running dosbox-automation instance
+dosbox --set webserver_enabled=true
+
+# 2. add the bridge to your MCP client (Claude Code)
+claude mcp add dosbox -- uvx --from vorticoncmdr-dosbox-mcp dosbox-mcp
+
+# or a JSON MCP config:
+# { "mcpServers": { "dosbox": { "command": "uvx", "args": ["--from", "vorticoncmdr-dosbox-mcp", "dosbox-mcp"] } } }
+# pipx install vorticoncmdr-dosbox-mcp / pip install vorticoncmdr-dosbox-mcp work too
+# (published under this name to avoid colliding with upstream's own "dosbox-mcp" package)
+
+# 3. that's it - the bridge finds the running emulator, checks what it
+#    can do, and registers the matching tools
+#    ask your agent for bridge_status, or bridge_start to spawn one itself</code></pre>
+        </div></div>
+    </section>
+
+    <section id="configuration">
+        <h2>Configuration</h2>
+        <p class="section-intro">
+            Optional. <code>dosbox-mcp setup --init</code> writes a commented config file;
+            <code>dosbox-mcp setup</code> (no flags) prints the effective config as JSON;
+            <code>dosbox-mcp probe</code> validates it end-to-end.
+        </p>
+        <div class="panel"><div class="panel-body">
+            <div class="table-scroll"><table>
+                <tr><th>Setting</th><th>Default</th><th>Purpose</th></tr>
+                <tr><td class="mono">binary</td><td class="mono">unset</td><td>Path to the dosbox binary <code>bridge_start</code> spawns. Human-edited only.</td></tr>
+                <tr><td class="mono">port</td><td class="mono">8386</td><td>Webserver port on <code>127.0.0.1</code>, used both to connect and to configure a spawned instance.</td></tr>
+                <tr><td class="mono">headless</td><td class="mono">false</td><td>Spawn without a window (SDL dummy video driver).</td></tr>
+                <tr><td class="mono">protocol</td><td class="mono">negotiates highest</td><td>Pin the bridge to a lower protocol version, e.g. <code>"1.0"</code>.</td></tr>
+                <tr><td class="mono">mode</td><td class="mono">full</td><td>Capability mode: <code>observe</code> (read-only), <code>interact</code> (+ input, video capture, scripts, lifecycle), <code>full</code> (+ memory writes, port I/O, register writes, debugger). Human-edited only.</td></tr>
+                <tr><td class="mono">token_file</td><td class="mono">engine default</td><td>Token file of an already-running instance to attach to.</td></tr>
+                <tr><td class="mono">mount_allowed_bases</td><td class="mono">empty</td><td>Up to 5 absolute host directories a spawned instance may let <code>drive_mount</code> mount. Human-edited only.</td></tr>
+                <tr><td class="mono">mount_allowed_image_roots</td><td class="mono">empty</td><td>Same mechanism for <code>drive_swap</code>'s disk-image source roots.</td></tr>
+            </table></div>
+            <h3 style="color:var(--fg-dim);font-size:0.8em;text-transform:uppercase;letter-spacing:0.06em;margin-top:1.2em;">Environment variable overrides</h3>
+            <div class="table-scroll"><table>
+                <tr><th>Variable</th><th>Purpose</th></tr>
+                <tr><td class="mono">DOSBOX_API_URL</td><td>Target base URL (loopback only: <code>127.0.0.1</code>, <code>::1</code>, or <code>localhost</code>).</td></tr>
+                <tr><td class="mono">DOSBOX_API_TOKEN</td><td>Bearer token by value (a token file is preferred).</td></tr>
+                <tr><td class="mono">DOSBOX_TOKEN_FILE</td><td>Override where the bridge reads the token from.</td></tr>
+                <tr><td class="mono">DOSBOX_MCP_CONFIG</td><td>Override the config file path.</td></tr>
+                <tr><td class="mono">DOSBOX_MCP_GHIDRA_MAP</td><td>Override where Ghidra address-mapping state persists.</td></tr>
+            </table></div>
+            <p style="color:var(--fg-dim);font-size:0.88em;margin-bottom:0;">The bridge talks to loopback addresses only; it will not reach out to a remote machine.</p>
+        </div></div>
+    </section>
+
+    <section id="tools">
+        <h2>Tools</h2>
+        <p class="section-intro">
+            All 85 tools this bridge can register, extracted from every <code>add_tool(...)</code>
+            call in <code>dosbox_mcp/tools/*.py</code> &mdash; how many an agent actually sees
+            depends on <code>mode</code> and what the attached engine build supports. Read-only
+            tools are safe to auto-approve.
+        </p>
+        <div class="filter-row">
+            <input type="text" id="tool-filter" placeholder="Filter by name, category, or feature&hellip;">
+            <span id="tool-count"></span>
+        </div>
+        <div class="panel"><div class="table-scroll">
+            <table id="tool-table">
+                <thead><tr><th>Tool</th><th>R/W</th><th>Category</th><th>Feature</th><th>Description</th><th>Example</th></tr></thead>
+                <tbody id="tool-tbody"></tbody>
+            </table>
+        </div></div>
+    </section>
+
+    <section id="ghidra">
+        <h2>Pairs with Ghidra for reverse engineering</h2>
+        <p class="section-intro">
+            The <strong>Debugger</strong> tools (execution control: pause/step/continue and
+            breakpoints) plus <strong>Ghidra address mapping</strong> and <strong>Symbols</strong>
+            let an agent combine this bridge with a separate Ghidra MCP server: analyze a program
+            statically in Ghidra, then set breakpoints and interpret a paused CPU state against the
+            exact same addresses live in DOSBox.
+        </p>
+        <div class="feature-grid">
+            <div class="feature-card">
+                <h3>Address mapping is pure arithmetic</h3>
+                <p><code>debug_map_set_base</code> and friends never talk to Ghidra or the engine &mdash; they translate addresses once anchored at one known correspondence point (usually the entry point). Exact for .COM programs and single-segment .EXE programs.</p>
+            </div>
+            <div class="feature-card">
+                <h3>The .COM 0x100 offset</h3>
+                <p>Ghidra's real-mode loader can't rebase a .COM import to a <code>segment:0x0100</code> layout, so it typically lands at <code>0000:0000</code> &mdash; a constant 0x100 below every live address. Anchoring absorbs that automatically.</p>
+            </div>
+            <div class="feature-card">
+                <h3>Symbols follow you everywhere</h3>
+                <p>Once loaded via <code>debug_symbols_load</code>, a <code>symbol</code> field appears on disassembly, debugger stop records, backtrace frames, and the DOS memory map.</p>
+            </div>
+        </div>
+    </section>
+</main>
+
+<footer>
+    <p>
+        GPL-2.0-or-later. Protocol spec is CC-BY-SA-4.0. A fork of upstream dosbox-mcp.
+        <a href="https://github.com/VorticonCmdr/dosbox-mcp">Source</a> &middot;
+        <a href="https://github.com/VorticonCmdr/dosbox-mcp/blob/main/PROTOCOL.md">Protocol</a> &middot;
+        <a href="https://github.com/VorticonCmdr/dosbox-mcp/tree/main/feelies">Manual &amp; reference card</a>
+    </p>
+</footer>
+
+<script src="tools-data.js"></script>
+<script>
+'use strict';
+
+function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderTools(rows) {
+    const tbody = document.getElementById('tool-tbody');
+    tbody.innerHTML = '';
+    for (const [name, ro, category, feature, desc, example] of rows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+            '<td class="mono">' + name + '</td>' +
+            '<td>' + (ro ? '<span class="badge badge-ro">RO</span>' : '<span class="badge badge-mut">mut</span>') + '</td>' +
+            '<td><span class="tag-chip">' + category + '</span></td>' +
+            '<td>' + (feature ? '<span class="tag-chip">' + feature + '</span>' : '') + '</td>' +
+            '<td>' + escapeHtml(desc) + '</td>' +
+            '<td class="example">' + escapeHtml(example) + '</td>';
+        tbody.appendChild(tr);
+    }
+    document.getElementById('tool-count').textContent = rows.length + ' of ' + TOOLS.length;
+}
+
+renderTools(TOOLS);
+
+document.getElementById('tool-filter').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderTools(TOOLS); return; }
+    renderTools(TOOLS.filter(([name, ro, category, feature, desc, example]) =>
+        (name + ' ' + category + ' ' + (feature||'') + ' ' + desc).toLowerCase().includes(q)));
+});
+</script>
+</body>
+</html>
