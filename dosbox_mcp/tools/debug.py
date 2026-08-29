@@ -211,7 +211,8 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "matching AH (and AL). E.g. int=0x21, ah=0x3d catches every "
             "DOS file-open call. Omit ah/al to match any value.\n"
             "- memory: a watchpoint - stop when the byte at segment:offset "
-            "changes value (not when execution reaches it). Needs a "
+            "changes value (trigger='write', the default) or is read "
+            "(trigger='read') - not when execution reaches it. Needs a "
             "heavy-debugger build; check "
             "dosbox_status(detail:true).info.capabilities.debugger first "
             "(or just try it - a build without one returns 501 "
@@ -273,6 +274,11 @@ def register(server, client, add_tool, feature=None, annotate=None):
                     "minimum": 0,
                     "maximum": 0xFF,
                     "description": "AL value to match for 'interrupt' breakpoints (0x00..0xFF). Omit to match any AL. Only meaningful with 'ah' also set.",
+                },
+                "trigger": {
+                    "type": "string",
+                    "enum": ["write", "read"],
+                    "description": "For 'memory' breakpoints only: which access fires it (default 'write').",
                 },
                 "once": {
                     "type": "boolean",
@@ -383,6 +389,83 @@ def register(server, client, add_tool, feature=None, annotate=None):
             },
         },
         handler=lambda args: _breakpoint_delete(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="debug_watch_add",
+        description=(
+            "Add a watched variable: name it and give its segment:offset, "
+            "and its live 16-bit value is read fresh (from guest memory, "
+            "not a cached copy) every time debug_watch_list is called - "
+            "the same IV/watch-panel concept the interactive debugger UI "
+            "has, exposed for automation. name is capped at 15 characters."
+        ),
+        risk="mutate_guest",
+        title="Add Watch",
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "maxLength": 15,
+                    "description": "Label for this watch (max 15 characters).",
+                },
+                "segment": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
+                    "description": "Segment (0x0000..0xFFFF).",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 0xFFFF,
+                    "description": "Offset.",
+                },
+            },
+            "required": ["name", "segment", "offset"],
+        },
+        handler=lambda args: _watch_add(client, args),
+        feature=feature,
+    )
+
+    add_tool(
+        name="debug_watch_list",
+        description=(
+            "List all watched variables, with each one's live value read "
+            "fresh from guest memory (not cached) at call time. 'address' "
+            "is the resolved flat address and the only real identity a "
+            "watch has - pass it to debug_watch_delete."
+        ),
+        risk="read",
+        title="List Watches",
+        schema={"type": "object", "properties": {}},
+        handler=lambda args: _watch_list(client),
+        feature=feature,
+    )
+
+    add_tool(
+        name="debug_watch_delete",
+        description=(
+            "Remove a watched variable by its 'address' (see "
+            "debug_watch_list). Omit to clear every watch."
+        ),
+        risk="mutate_guest",
+        title="Delete Watch",
+        idempotent=True,
+        schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "address": {
+                    "type": "integer",
+                    "description": "Flat address of the watch to remove (see debug_watch_list). Omit to clear all.",
+                },
+            },
+        },
+        handler=lambda args: _watch_delete(client, args),
         feature=feature,
     )
 
@@ -597,6 +680,28 @@ def _breakpoint_delete(client, args):
         result = client.delete("/api/v1/debug/breakpoints", json=body)
     else:
         result = client.delete("/api/v1/debug/breakpoints")
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _watch_add(client, args):
+    import mcp.types as types
+    result = client.post("/api/v1/debug/watches", json=args)
+    return [types.TextContent(type="text", text=json.dumps(result))]
+
+
+def _watch_list(client):
+    import mcp.types as types
+    result = client.get("/api/v1/debug/watches")
+    return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+def _watch_delete(client, args):
+    import mcp.types as types
+    body = {"address": args["address"]} if "address" in args else None
+    if body:
+        result = client.delete("/api/v1/debug/watches", json=body)
+    else:
+        result = client.delete("/api/v1/debug/watches")
     return [types.TextContent(type="text", text=json.dumps(result))]
 
 

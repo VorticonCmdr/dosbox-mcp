@@ -18,6 +18,9 @@ from dosbox_mcp.tools.debug import (
     _step_out,
     _step_over,
     _wait,
+    _watch_add,
+    _watch_delete,
+    _watch_list,
 )
 
 
@@ -149,6 +152,17 @@ def test_breakpoint_add_posts_args_straight_through_including_condition_and_igno
     assert client.last_kwargs["json"] == args
 
 
+def test_breakpoint_add_posts_a_memory_trigger_straight_through():
+    client = _FakeClient({"status": "ok", "id": 2, "trigger": "read"})
+    args = {"type": "memory", "segment": 0, "offset": 0x100, "trigger": "read"}
+
+    _breakpoint_add(client, args)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/debug/breakpoints"
+    assert client.last_kwargs["json"] == args
+
+
 def test_breakpoint_list_gets_the_breakpoints_route_with_no_body():
     client = _FakeClient({"breakpoints": [], "count": 0})
 
@@ -157,6 +171,45 @@ def test_breakpoint_list_gets_the_breakpoints_route_with_no_body():
     assert client.last_method == "get"
     assert client.last_path == "/api/v1/debug/breakpoints"
     assert json.loads(result[0].text) == {"breakpoints": [], "count": 0}
+
+
+def test_watch_add_posts_args_straight_through():
+    client = _FakeClient(
+        {"status": "ok", "name": "hp", "address": 0x1234, "hasValue": True, "value": 100}
+    )
+    args = {"name": "hp", "segment": 0x0, "offset": 0x1234}
+
+    _watch_add(client, args)
+
+    assert client.last_method == "post"
+    assert client.last_path == "/api/v1/debug/watches"
+    assert client.last_kwargs["json"] == args
+
+
+def test_watch_list_gets_the_watches_route_with_no_body():
+    client = _FakeClient({"watches": [], "count": 0})
+
+    result = _watch_list(client)
+
+    assert client.last_method == "get"
+    assert client.last_path == "/api/v1/debug/watches"
+    assert json.loads(result[0].text) == {"watches": [], "count": 0}
+
+
+def test_watch_delete_with_address_sends_only_address():
+    client = _FakeClient({"status": "removed", "address": 0x1234})
+
+    _watch_delete(client, {"address": 0x1234})
+
+    assert client.last_kwargs["json"] == {"address": 0x1234}
+
+
+def test_watch_delete_with_no_args_sends_no_body():
+    client = _FakeClient({"status": "cleared"})
+
+    _watch_delete(client, {})
+
+    assert "json" not in client.last_kwargs
 
 
 def test_disassemble_builds_the_path_from_segment_offset_and_count():

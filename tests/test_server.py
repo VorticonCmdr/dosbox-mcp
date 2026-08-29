@@ -67,6 +67,7 @@ def test_all_tools_registered_regardless_of_features():
     assert "cpu_read_registers" in names
     for t in ("debug_status", "debug_pause", "debug_continue", "debug_step",
               "debug_breakpoint_add", "debug_breakpoint_list", "debug_breakpoint_delete",
+              "debug_watch_add", "debug_watch_list", "debug_watch_delete",
               "debug_backtrace", "debug_step_out"):
         assert t in names
     for t in ("debug_map_set_base", "debug_map_auto", "debug_map_to_live",
