@@ -37,6 +37,23 @@
 # caller re-anchors it - via debug_map_set_base or debug_map_auto -
 # rather than silently answering translations with a stale segment from
 # a previous run.
+#
+# One caller-side rule this module exists to make cheap, learned the
+# expensive way. A Ghidra xref query that comes back empty is not
+# evidence until you can name the address you actually meant. Ghidra
+# answers about exactly the address it is handed, so a wrong-but-mapped
+# address returns a clean, confident zero indistinguishable from a real
+# "nothing references this" - and a negative like that gets inherited by
+# later passes as settled fact instead of being re-derived. Before
+# believing one: check debug_map_status shows the range re-anchored this
+# session (a range loaded from disk has no live segment until it is),
+# and get the spelling from the referencing side rather than by
+# construction - Ghidra's own get_xrefs_from at a known referencing
+# instruction returns the canonical target address in one call, and
+# list_data_items_by_xrefs prints an address and its reference count
+# together. Then record which address was queried alongside the
+# conclusion: "no writers found at X, resolved into block Y" survives
+# re-reading; "nothing writes this" does not.
 
 import json
 import logging
@@ -171,7 +188,11 @@ def register(server, client, add_tool, feature=None):
             "whose Ghidra span the translated address falls into. Handy "
             "for looking up what function a breakpoint hit inside, or "
             "what a paused cs:eip corresponds to in the decompilation. "
-            "Refuses (rather than guessing) when no range covers it."
+            "Refuses (rather than guessing) when no range covers it. "
+            "What this returns is the address to query in Ghidra: if an "
+            "xref query on it comes back empty, confirm with "
+            "debug_map_status that the range was re-anchored this "
+            "session before treating that zero as evidence."
         ),
         risk="read",
         title="Live Address to Ghidra",
