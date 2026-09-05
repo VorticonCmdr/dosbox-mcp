@@ -203,9 +203,17 @@ def register(server, client, add_tool, feature=None, annotate=None):
     add_tool(
         name="debug_breakpoint_add",
         description=(
-            "Add a breakpoint. Takes effect on the next debug_continue "
-            "(breakpoints are activated when execution resumes, not when "
-            "added). Three kinds:\n"
+            "Add a breakpoint. It is armed only when execution resumes "
+            "from a paused state, so pause first (debug_pause) or it sits "
+            "inert: on an emulator that has never been paused there is "
+            "nothing for debug_continue to resume, nothing gets armed, and "
+            "the breakpoint never fires while still reporting 'ok' with an "
+            "id and a debug_breakpoint_list entry. Any later pause/continue "
+            "cycle arms it. This is not specific to one kind - execute and "
+            "memory breakpoints were both observed sitting unarmed this "
+            "way, and every kind shares the same activation path. Check "
+            "'active' in debug_breakpoint_list to tell armed from inert. "
+            "Three kinds:\n"
             "- execute: stop before the instruction at segment:offset runs.\n"
             "- interrupt: stop when the given INT is raised, optionally "
             "matching AH (and AL). E.g. int=0x21, ah=0x3d catches every "
@@ -224,10 +232,7 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "byte; the write trigger is a value poll rather than a "
             "store trap, so a store writing back the same value is "
             "invisible; and the stop is reported at the instruction "
-            "after the store, not at the store. once=true is also "
-            "ignored on this kind (execute and interrupt do honor it), "
-            "so a memory breakpoint reports itself one-shot and then "
-            "keeps firing.\n"
+            "after the store, not at the store.\n"
             "ignore_count and condition make a hot breakpoint usable: skip "
             "the first N hits (ignore_count), or only actually stop when a "
             "register or memory value compares a certain way (condition). "
@@ -364,7 +369,10 @@ def register(server, client, add_tool, feature=None, annotate=None):
             "whenever any breakpoint is added or removed. 'hit_count' counts "
             "every genuine match at this breakpoint's location, including "
             "ones skipped by 'ignore_count' or a false 'condition' - it does "
-            "not mean the emulator actually stopped that many times."
+            "not mean the emulator actually stopped that many times. "
+            "'active' is whether the breakpoint is armed, not whether it "
+            "has hit: one added while the emulator was never paused stays "
+            "false and cannot fire until a pause/continue cycle arms it."
         ),
         risk="read",
         title="List Breakpoints",
