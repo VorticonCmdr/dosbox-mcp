@@ -223,6 +223,7 @@ _TOML_KEYS = {
     "binary": _validate_path("binary"),
     "port": _validate_port,
     "headless": _validate_bool("headless"),
+    "mute": _validate_bool("mute"),
     "protocol": _validate_protocol,
     "mode": _validate_mode,
     "token_file": _validate_path("token_file"),
@@ -255,6 +256,7 @@ class Config:
     binary: Path | None = None
     port: int = DEFAULT_PORT
     headless: bool = False
+    mute: bool = False
     protocol: str | None = None
     mode: str = "full"
     token_file: Path | None = None
@@ -278,6 +280,7 @@ class Config:
             binary=data.get("binary"),
             port=port,
             headless=data.get("headless", False),
+            mute=data.get("mute", False),
             protocol=data.get("protocol"),
             mode=data.get("mode", "full"),
             token_file=token_file,
@@ -329,6 +332,12 @@ _CONFIG_TEMPLATE = """\
 
 # Spawn without a window (SDL dummy video driver).
 #headless = false
+
+# Spawn without sound output (SDL dummy audio driver). The engine still
+# emulates and mixes audio - this only stops it reaching a real device,
+# same as headless does for video. Not the engine's own [mixer] nosound
+# setting, which keeps a real device open and discards what it writes.
+#mute = false
 
 # Pin the bridge to a lower protocol version, "major.minor" form.
 #protocol = "1.0"

@@ -74,6 +74,7 @@ reports the negotiated protocol and features).
 | `binary` | *(unset)* | Path to the dosbox binary `bridge_start` spawns. Human-edited only — no tool can change it. |
 | `port` | `8386` | Webserver port on `127.0.0.1`, used both to connect and to configure a spawned instance. |
 | `headless` | `false` | Spawn without a window (SDL dummy video driver). |
+| `mute` | `false` | Spawn without sound output (SDL dummy audio driver). The engine still emulates audio; this just stops it reaching a real device. |
 | `protocol` | *(negotiates highest)* | Pin the bridge to a lower protocol version, e.g. `"1.0"`. |
 | `mode` | `full` | Capability mode: `observe` (read-only), `interact` (+ input, video capture, scripts, lifecycle), `full` (+ memory writes, port I/O, register writes, debugger). Human-edited only. |
 | `token_file` | *(engine default)* | Token file of an already-running instance to attach to. |

@@ -217,6 +217,17 @@ class InstanceManager:
                 # real display) - "dummy" is the one that actually
                 # starts here.
                 env["SDL_VIDEODRIVER"] = "dummy"
+            if self._config.mute:
+                # Same idiom as headless, one layer down: SDL's dummy
+                # audio driver takes no real device, so nothing is heard
+                # and no OS audio subsystem is touched - the mixer still
+                # runs (this is not the engine's own [mixer] nosound,
+                # which keeps a real device open and just discards what
+                # it writes). dosbox-automation's own integration harness
+                # already pairs SDL_VIDEODRIVER=dummy with
+                # SDL_AUDIODRIVER=dummy this same way for every headless
+                # test instance it spawns.
+                env["SDL_AUDIODRIVER"] = "dummy"
 
             self._ring = RingLog()
             try:

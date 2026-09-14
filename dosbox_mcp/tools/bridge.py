@@ -101,8 +101,9 @@ def _setup(args):
     path = default_config_path()
     if not changes:
         return _text(
-            "nothing to change - settable keys: port, headless, protocol. "
-            "binary and mode live in the human-edited config file only."
+            "nothing to change - settable keys: port, headless, mute, "
+            "protocol. binary and mode live in the human-edited config "
+            "file only."
         )
     try:
         update_config_file(path, changes, tool_facing=True)
@@ -248,9 +249,9 @@ def register(server, conn, add_tool, manager, mode):
     add_tool(
         name="bridge_setup",
         description=(
-            "Change safe bridge settings: port, headless, protocol pin. "
-            "The binary path and the capability mode are human-edited "
-            "only and are rejected here by design."
+            "Change safe bridge settings: port, headless, mute, protocol "
+            "pin. The binary path and the capability mode are "
+            "human-edited only and are rejected here by design."
         ),
         risk="lifecycle",
         title="Configure Bridge",
@@ -265,6 +266,8 @@ def register(server, conn, add_tool, manager, mode):
                          "description": "Webserver port on 127.0.0.1."},
                 "headless": {"type": "boolean",
                              "description": "Spawn without a window."},
+                "mute": {"type": "boolean",
+                         "description": "Spawn without sound output."},
                 "protocol": {"type": "string",
                              "description": 'Protocol pin, "major.minor".'},
             },
