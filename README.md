@@ -79,6 +79,7 @@ reports the negotiated protocol and features).
 | `token_file` | *(engine default)* | Token file of an already-running instance to attach to. |
 | `mount_allowed_bases` | *(empty)* | Up to 5 absolute host directories a spawned instance may let `drive_mount` mount. Human-edited only; unset means every `drive_mount` call is refused by policy. |
 | `mount_allowed_image_roots` | *(empty)* | Same mechanism for `drive_swap`'s disk-image source roots. Human-edited only. |
+| `webserver_require_auth` | `true` | Disable the engine's bearer-token check on a spawned instance, so `debugger.html`/`control.html` connect with the token field left blank. Only takes effect because a spawned instance always stays bound to `127.0.0.1` - the engine itself refuses this otherwise. Every request on that port is unauthenticated while set, from any local process. Human-edited only. |
 
 Every path in `mount_allowed_bases`/`mount_allowed_image_roots` must be absolute, exist, and be
 free of symlink components — same rule the engine itself enforces.

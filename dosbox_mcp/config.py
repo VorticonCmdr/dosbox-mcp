@@ -228,6 +228,7 @@ _TOML_KEYS = {
     "token_file": _validate_path("token_file"),
     "mount_allowed_bases": _validate_path_list("mount_allowed_bases"),
     "mount_allowed_image_roots": _validate_path_list("mount_allowed_image_roots"),
+    "webserver_require_auth": _validate_bool("webserver_require_auth"),
 }
 
 
@@ -259,6 +260,7 @@ class Config:
     token_file: Path | None = None
     mount_allowed_bases: list[Path] = field(default_factory=list)
     mount_allowed_image_roots: list[Path] = field(default_factory=list)
+    webserver_require_auth: bool = True
 
     @classmethod
     def load(cls, path: Path | None = None) -> "Config":
@@ -281,6 +283,7 @@ class Config:
             token_file=token_file,
             mount_allowed_bases=data.get("mount_allowed_bases", []),
             mount_allowed_image_roots=data.get("mount_allowed_image_roots", []),
+            webserver_require_auth=data.get("webserver_require_auth", True),
         )
         cfg.token = read_token(cfg.token_file)
         return cfg
@@ -298,11 +301,17 @@ class ToolProtectedKey(ValueError):
 # mount_allowed_bases/mount_allowed_image_roots: the filesystem
 # whitelist drive_mount/drive_swap enforce - an agent that could widen
 # it would be granting itself access, defeating the whitelist entirely.
-# bridge_setup's tool schema already excludes all four keys
+# webserver_require_auth: turns off the engine's own auth check for
+# every client on the loopback interface, not just this bridge - an
+# agent that could flip it would be granting itself (and anything else
+# on the machine) unauthenticated access to a spawned instance, the
+# same self-escalation shape as mode.
+# bridge_setup's tool schema already excludes all five keys
 # (additionalProperties: False, only port/headless/protocol listed);
 # this set is the second gate, exercised if that schema is ever loosened.
 _TOOL_PROTECTED_KEYS = frozenset({
     "binary", "mode", "mount_allowed_bases", "mount_allowed_image_roots",
+    "webserver_require_auth",
 })
 
 _CONFIG_TEMPLATE = """\
@@ -346,6 +355,18 @@ _CONFIG_TEMPLATE = """\
 # tool can change this, the same reasoning as binary and mode.
 #mount_allowed_bases = ["/home/user/games"]
 #mount_allowed_image_roots = ["/home/user/images"]
+
+# Disable the engine's bearer-token check on a bridge_start-spawned
+# instance - lets you open debugger.html/control.html and click Connect
+# with the token field left blank, instead of copying the token out of
+# bridge_logs. Safe only because a spawned instance is never told to
+# bind anywhere but 127.0.0.1 (there is no config key that changes
+# that), which is exactly the condition the engine itself requires
+# before it will honor this setting; it refuses outright on any other
+# bind address. Every request on that port is unauthenticated while
+# this is set, including from other local processes. Human-edited only:
+# no tool can change this, the same reasoning as mode.
+#webserver_require_auth = true
 """
 
 

@@ -124,7 +124,26 @@ class InstanceManager:
             "--nolocalconf",
             "--set", "webserver_enabled=true",
             "--set", f"webserver_port={self._config.port}",
+            *self._auth_args(),
         ]
+
+    def _auth_args(self) -> list[str]:
+        """--set webserver_require_auth=false, only when the human-edited
+        config opted out (default stays the engine's own true - no flag
+        needed then, so the common case leaves argv unchanged).
+
+        The engine refuses to honor require_auth=false unless bound to a
+        loopback address with webserver_allow_remote=false
+        (src/webserver/webserver.cpp). Nothing here ever sets
+        webserver_bind_address or webserver_allow_remote - there is no
+        config key for either - so a spawned instance always satisfies
+        that guard and this is safe to pass unconditionally when
+        configured. It is still an unauthenticated webserver on
+        127.0.0.1: any other process on the machine can reach it too.
+        """
+        if self._config.webserver_require_auth:
+            return []
+        return ["--set", "webserver_require_auth=false"]
 
     def _write_policy_config(self, state_dir: Path) -> None:
         """Write a primary config the engine reads regardless of
