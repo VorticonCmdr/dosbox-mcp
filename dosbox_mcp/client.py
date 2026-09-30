@@ -40,11 +40,13 @@ class DosboxClient:
 
     def __init__(self, base_url, token, transport=None):
         self._base = base_url.rstrip("/")
+        headers = {"X-Client": "mcp"}
+        # token None: an engine running with webserver_require_auth=false
+        # (see Connection._try_connect); no Authorization header at all.
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
         self._client = httpx.Client(
-            headers={
-                "Authorization": f"Bearer {token}",
-                "X-Client": "mcp",
-            },
+            headers=headers,
             transport=transport,
             timeout=30.0,
         )

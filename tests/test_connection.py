@@ -242,6 +242,49 @@ class TestNoTokenDiagnostics:
             conn.ensure_connected()
 
 
+class TestTokenlessAttach:
+    """webserver_require_auth=false in config: attach with no token when
+    the engine really answers unauthenticated, on loopback only."""
+
+    def _conn(self, base_url="http://127.0.0.1:8386", require_auth=False,
+              engine_checks_auth=False):
+        def handler(request):
+            if request.url.path == "/api/v1/dosbox/info":
+                if engine_checks_auth or "authorization" in request.headers:
+                    return httpx.Response(401, json={"error": "unauthorized"})
+                return httpx.Response(200, json={"features": {"memory": True}})
+            return httpx.Response(404, json={"error": "not found"})
+        config = Config(base_url=base_url, token=None,
+                        webserver_require_auth=require_auth)
+        return Connection(config, transport=httpx.MockTransport(handler))
+
+    def test_attaches_without_a_token_or_authorization_header(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        monkeypatch.setenv("DOSBOX_TOKEN_FILE", str(tmp_path / "none"))
+        conn = self._conn()
+        conn.ensure_connected()
+        assert conn.connected
+        assert conn.features == {"memory": True}
+
+    def test_default_config_still_requires_a_token(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        monkeypatch.setenv("DOSBOX_TOKEN_FILE", str(tmp_path / "none"))
+        with pytest.raises(NotConnected, match="token"):
+            self._conn(require_auth=True).ensure_connected()
+
+    def test_non_loopback_never_attaches_tokenless(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        monkeypatch.setenv("DOSBOX_TOKEN_FILE", str(tmp_path / "none"))
+        with pytest.raises(NotConnected):
+            self._conn(base_url="http://192.168.1.5:8386").ensure_connected()
+
+    def test_engine_that_still_checks_auth_reports_the_token(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("DOSBOX_API_TOKEN", raising=False)
+        monkeypatch.setenv("DOSBOX_TOKEN_FILE", str(tmp_path / "none"))
+        with pytest.raises(NotConnected, match="still requires a token"):
+            self._conn(engine_checks_auth=True).ensure_connected()
+
+
 class TestStatus:
     def test_status_when_connected(self):
         conn = _connectable({"version": "0.84-da3", "features": {"memory": True},

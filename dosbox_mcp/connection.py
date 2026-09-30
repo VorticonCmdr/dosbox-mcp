@@ -142,9 +142,20 @@ class Connection:
             )
         return f"No API token available and nothing answers at {self.base_url} - is dosbox running?"
 
+    def _tokenless_allowed(self) -> bool:
+        """With no token anywhere, still try an unauthenticated attach when
+        the human-edited config sets webserver_require_auth=false and the
+        target is loopback - the only bind the engine honors that setting
+        on. This covers an instance started outside bridge_start (no token
+        file is ever written for it)."""
+        if self._config.webserver_require_auth:
+            return False
+        host = httpx.URL(self._config.base_url).host
+        return host in ("127.0.0.1", "localhost", "::1")
+
     def _try_connect(self):
         token = self._config.token or read_token(self._config.token_file)
-        if token is None:
+        if token is None and not self._tokenless_allowed():
             raise NotConnected(self._no_token_message())
 
         client = DosboxClient(self._config.base_url, token,
@@ -156,6 +167,14 @@ class Connection:
                 f"Cannot reach dosbox at {self._config.base_url}: {e}"
             ) from None
         except DosboxError as e:
+            if e.status == 401 and token is None:
+                # Tokenless attach was allowed by config but this engine
+                # still checks auth: report it like any missing token.
+                raise NotConnected(
+                    self._no_token_message()
+                    + " (webserver_require_auth=false is set, but this"
+                    " instance still requires a token)"
+                ) from None
             if e.status == 401 and self._config.token:
                 # A remembered token (e.g. from a stopped spawned
                 # instance) went stale: drop it and retry once via the
