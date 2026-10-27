@@ -168,6 +168,7 @@ supports. Version 1.0 defines these flags, all boolean:
 | port_io | x86 I/O port read/write |
 | freeze | per-frame value locks |
 | debugger | execution control: pause/continue/step and breakpoints (1.1) |
+| debug_call | `debug/call`: run a guest routine from the paused state and restore the machine (1.15) |
 
 A flag that is absent counts as false. Flags gate at call time: a
 client may know a route exists in the contract while the running build
@@ -768,3 +769,16 @@ changed and the version it produces.
   Not a minor: no route, field, or negotiable behavior is added - a
   client that already treats `error_code` as opaque needs no changes to
   interoperate with an engine that has this configured.
+- **1.15.0 (draft)** - adds `POST /debug/call` and its feature flag
+  `debug_call` (needs a debugger build). It runs one guest routine like
+  its callers do, from the state the debugger is paused in, once per case
+  (up to 64 per request), and restores guest RAM, VGA memory and CPU/FPU
+  state after each. `return: push | replace` picks whether the sentinel
+  return address is pushed or replaces the one already at SS:SP (paused
+  at the routine's entry). The response gives registers, memory diffs per
+  requested range, every port access, interrupt and DOSBox-side handler
+  call, and an `unrestored` list naming state outside the snapshot the
+  routine may have changed; a client must treat a non-empty list as
+  untrustworthy unless it has opted in. Hardware interrupts are off unless
+  `timers` is set. Limits are reported in `capabilities.debug_call`.
+  The schema in openapi.json is normative.
