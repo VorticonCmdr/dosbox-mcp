@@ -111,7 +111,10 @@ def _setup(args):
         return to_error_result(str(e), tool="bridge_setup", code="protected_key")
     except ValueError as e:
         return to_error_result(str(e), tool="bridge_setup", code="invalid_argument")
-    return _text(f"saved to {path} - takes effect at the next bridge start")
+    return _text(
+        f"saved to {path} - takes effect at the next bridge_start "
+        "(a running instance keeps its current settings)"
+    )
 
 
 def _known_prefixes_for(conn) -> frozenset[str]:

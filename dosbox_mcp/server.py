@@ -70,7 +70,8 @@ def build_server(conn, mode: str = "full", manager=None):
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     if manager is None:
-        manager = InstanceManager(conn.config, attach=_make_attach(conn))
+        manager = InstanceManager(conn.config, attach=_make_attach(conn),
+                                  reload=Config.load)
 
     server = Server("dosbox-mcp")
     registry = {}

@@ -394,3 +394,54 @@ class TestRingLog:
         for i in range(5):
             ring.append(f"line {i}")
         assert ring.tail(2) == ["line 3", "line 4"]
+
+
+class TestReloadOnStart:
+    def test_start_picks_up_config_changed_after_construction(self, fake_engine, tmp_path):
+        # The bug this guards against: bridge_setup wrote headless=true
+        # to the file, but bridge_start kept spawning with the settings
+        # loaded when the MCP server started.
+        shared = _config(binary=None, headless=False)
+        fresh = _config(binary=fake_engine, headless=True, port=9123)
+        calls = []
+        manager = InstanceManager(shared, attach=_ok_attach(calls),
+                                  reload=lambda: fresh)
+        try:
+            manager.start(deadline_seconds=5.0)
+            # Updated in place: the connection holds this same object.
+            assert shared.binary == fake_engine
+            assert shared.headless is True
+            assert shared.base_url == "http://127.0.0.1:9123"
+            assert calls[0][0] == "http://127.0.0.1:9123"
+            dump_path = tmp_path / "env_dump.json"
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and not dump_path.exists():
+                time.sleep(0.05)
+            dump = json.loads(dump_path.read_text())
+            assert dump["SDL_VIDEODRIVER"] == "dummy"
+            assert "--set" in dump["argv"] and "webserver_port=9123" in dump["argv"]
+        finally:
+            if manager.running:
+                manager.stop()
+
+    def test_reload_keeps_mode_and_token(self, fake_engine):
+        shared = _config(binary=fake_engine)
+        shared.mode = "observe"
+        shared.token = "keep-me"
+        fresh = _config(binary=fake_engine)
+        fresh.mode = "full"
+        fresh.token = None
+        manager = InstanceManager(shared, attach=_ok_attach([]),
+                                  reload=lambda: fresh)
+        manager._reload_config()
+        assert shared.mode == "observe"
+        assert shared.token == "keep-me"
+
+    def test_malformed_config_is_a_lifecycle_error(self):
+        def broken():
+            raise ValueError("malformed config /x/config.toml: bad")
+        manager = InstanceManager(_config(binary="/bin/dosbox"),
+                                  attach=_ok_attach([]), reload=broken)
+        with pytest.raises(LifecycleError, match="cannot reload config"):
+            manager.start()
+        assert not manager.running

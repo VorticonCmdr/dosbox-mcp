@@ -83,11 +83,29 @@ class InstanceManager:
     `attach` is injected (a callable (base_url, token) -> info dict that
     performs the authenticated probe) so the process handling stays
     testable without a network.
+
+    `reload` is an optional callable () -> Config. When given, `start`
+    calls it before every spawn and copies the spawn-relevant settings
+    onto the shared config object, so edits to the config file
+    (bridge_setup, or a human editing binary/mount policy) take effect
+    at the next bridge_start instead of only after the MCP server
+    restarts.
     """
 
-    def __init__(self, config: Config, attach):
+    # Settings that shape a spawn and are safe to pick up at runtime.
+    # `mode` is excluded on purpose: it decides which tools are
+    # registered, which is fixed for the server's lifetime. `token` and
+    # `token_file` are excluded because a spawn generates its own token.
+    RELOADED_FIELDS = (
+        "binary", "port", "base_url", "headless", "mute", "protocol",
+        "mount_allowed_bases", "mount_allowed_image_roots",
+        "webserver_require_auth",
+    )
+
+    def __init__(self, config: Config, attach, reload=None):
         self._config = config
         self._attach = attach
+        self._reload = reload
         self._proc: subprocess.Popen | None = None
         self._state_dir: Path | None = None
         self._ring: RingLog | None = None
@@ -170,6 +188,19 @@ class InstanceManager:
             "[webserver]\n" + "\n".join(lines) + "\n", encoding="utf-8"
         )
 
+    def _reload_config(self) -> None:
+        """Re-read the config file and update the shared config object
+        in place (it is the same object the connection reads base_url
+        from, so a changed port is followed by the attach too)."""
+        if self._reload is None:
+            return
+        try:
+            fresh = self._reload()
+        except ValueError as e:
+            raise LifecycleError(f"cannot reload config: {e}") from e
+        for name in self.RELOADED_FIELDS:
+            setattr(self._config, name, getattr(fresh, name))
+
     def start(self, deadline_seconds: float = 30.0) -> dict:
         """Spawn the configured binary and complete an authenticated
         attach with a token generated up front and handed to the child
@@ -180,6 +211,7 @@ class InstanceManager:
                     f"an instance is already managed (pid {self.pid}) - "
                     "stop it before starting another"
                 )
+            self._reload_config()
             argv = self.build_argv()
 
             self._state_dir = Path(tempfile.mkdtemp(prefix="dosbox-mcp-"))
